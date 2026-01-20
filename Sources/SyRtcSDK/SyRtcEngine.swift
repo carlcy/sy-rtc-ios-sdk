@@ -23,7 +23,7 @@ public class SyRtcEngine {
     }
     
     /// 初始化引擎（兼容旧API）
-    public func init(_ appId: String) {
+    public func `init`(_ appId: String) {
         initialize(appId: appId)
     }
     

@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'SyRtcSDK'
-  s.version          = '1.0.1'
+  s.version          = '1.0.2'
   s.summary          = 'SY RTC iOS SDK for audio communication'
   s.description      = <<-DESC
 SY RTC iOS SDK provides real-time audio and video communication capabilities.
@@ -15,4 +15,7 @@ SY RTC iOS SDK provides real-time audio and video communication capabilities.
   s.frameworks = 'Foundation', 'AVFoundation'
   # WebRTC 依赖（CocoaPods）
   s.dependency 'GoogleWebRTC'
+  # Apple Silicon 下 Simulator arm64 可能与 WebRTC.framework 的 slice 不匹配（导致链接失败）
+  # 如需在 iOS Simulator 运行，可在 Podfile 中排除 arm64，或使用 Rosetta 跑 x86_64 Simulator。
+  s.pod_target_xcconfig = { 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'arm64' }
 end
