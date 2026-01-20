@@ -37,6 +37,18 @@ SY RTC iOS SDK 是一个用于实时语音通信的 iOS 原生 SDK。
    end
    ```
 
+   **Apple Silicon（M 系列）提示**：如果你需要在 iOS Simulator 运行，可能需要在 `Podfile` 里排除 `arm64`：
+
+```ruby
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
+    end
+  end
+end
+```
+
 2. **安装依赖**
 
    ```bash
