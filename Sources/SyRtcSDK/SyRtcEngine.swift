@@ -34,13 +34,13 @@ public class SyRtcEngine {
     ///   - uid: 用户ID
     ///   - token: 鉴权Token
     public func join(channelId: String, uid: String, token: String) {
-        // 调用实现类
-        eventHandler?.onUserJoined(uid: uid, elapsed: 0)
+        impl?.eventHandler = eventHandler
+        impl?.join(channelId: channelId, uid: uid, token: token)
     }
     
     /// 离开频道
     public func leave() {
-        // 调用实现类
+        impl?.leave()
     }
     
     /// 启用/禁用本地音频
@@ -61,7 +61,7 @@ public class SyRtcEngine {
     /// 
     /// - Parameter role: 角色：.host 或 .audience
     public func setClientRole(_ role: SyRtcClientRole) {
-        // 调用实现类
+        impl?.setClientRole(role)
     }
     
     /// 设置事件处理器
@@ -69,6 +69,12 @@ public class SyRtcEngine {
     /// - Parameter handler: 事件处理器
     public func setEventHandler(_ handler: SyRtcEventHandler) {
         self.eventHandler = handler
+        impl?.eventHandler = handler
+    }
+
+    /// 设置信令服务器地址（可选）
+    public func setSignalingServerUrl(_ url: String) {
+        impl?.setSignalingServerUrl(url)
     }
     
     /// 启用视频模块

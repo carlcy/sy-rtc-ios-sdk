@@ -9,6 +9,7 @@ import CoreImage
 /// 包含所有原生方法的实现
 internal class SyRtcEngineImpl {
     private let appId: String
+    weak var eventHandler: SyRtcEventHandler?
     private var audioEngine: AVAudioEngine?
     private var isSpeakerphoneEnabled = false
     private var isVideoEnabled = false
@@ -56,6 +57,19 @@ internal class SyRtcEngineImpl {
     private var dataStreams: [Int: Bool] = [:]
     private var dataChannelMap: [Int: RTCDataChannel] = [:]
     private var peerConnections: [String: RTCPeerConnection] = [:]
+
+    // 信令
+    private var signalingClient: SyRtcSignalingClient?
+    private var signalingUrl: String = "ws://47.105.48.196/ws/signaling"
+    private var currentChannelId: String?
+    private var currentUid: String?
+    private var currentToken: String?
+    
+    // 多人语聊（Mesh）：每个远端用户一条 PeerConnection（key=remoteUid）
+    private var offerSentByUid: Set<String> = []
+    private var remoteSdpSetByUid: Set<String> = []
+    private var pendingLocalIceByUid: [String: [RTCIceCandidate]] = [:]
+    private var pendingRemoteIceByUid: [String: [RTCIceCandidate]] = [:]
     
     // 旁路推流
     private var rtmpStreams: [String: LiveTranscoding] = [:]
@@ -85,6 +99,193 @@ internal class SyRtcEngineImpl {
         self.appId = appId
         initializeAudioSystem()
         initializeWebRTC()
+    }
+
+    func setSignalingServerUrl(_ url: String) {
+        if !url.isEmpty {
+            signalingUrl = url
+        }
+    }
+
+    // MARK: - 频道（多人语聊 Mesh）
+    func join(channelId: String, uid: String, token: String) {
+        currentChannelId = channelId
+        currentUid = uid
+        currentToken = token
+        offerSentByUid.removeAll()
+        remoteSdpSetByUid.removeAll()
+        pendingLocalIceByUid.removeAll()
+        pendingRemoteIceByUid.removeAll()
+
+        // 连接信令
+        signalingClient = SyRtcSignalingClient(signalingUrl: signalingUrl, channelId: channelId, uid: uid) { [weak self] type, data in
+            self?.handleSignalingMessage(type: type, data: data, channelId: channelId)
+        }
+        signalingClient?.connect()
+
+        // 本地音频轨道（多人：后续每条 PC 都 addTrack）
+        if let factory = peerConnectionFactory, localAudioTrack == nil {
+            let audioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+            localAudioTrack = factory.audioTrack(with: audioSource, trackId: "audio_track")
+        }
+    }
+
+    func leave() {
+        peerConnections.values.forEach { $0.close() }
+        peerConnections.removeAll()
+        offerSentByUid.removeAll()
+        remoteSdpSetByUid.removeAll()
+        pendingLocalIceByUid.removeAll()
+        pendingRemoteIceByUid.removeAll()
+        signalingClient?.disconnect()
+        signalingClient = nil
+        currentChannelId = nil
+        currentUid = nil
+        currentToken = nil
+    }
+
+    private func createPeerConnection(remoteUid: String) -> RTCPeerConnection? {
+        guard let factory = peerConnectionFactory else { return nil }
+        let config = RTCConfiguration()
+        config.sdpSemantics = .unifiedPlan
+        // 这里建议配置你自己的 STUN/TURN；先给一个公共 STUN 做最小可用
+        config.iceServers = [RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])]
+        let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        let pc = factory.peerConnection(with: config, constraints: constraints, delegate: PeerDelegate(owner: self, remoteUid: remoteUid))
+        peerConnections[remoteUid] = pc
+        pendingLocalIceByUid[remoteUid] = []
+        pendingRemoteIceByUid[remoteUid] = []
+        // add tracks
+        if let track = localAudioTrack { pc.add(track, streamIds: ["stream"]) }
+        return pc
+    }
+
+    private func handleSignalingMessage(type: String, data: [String: Any], channelId: String) {
+        switch type {
+        case "user-list":
+            guard let localUid = currentUid else { return }
+            let users = (data["users"] as? [String]) ?? []
+            for u in users where u != localUid {
+                if peerConnections[u] == nil { _ = createPeerConnection(remoteUid: u) }
+                if shouldInitiateOffer(localUid: localUid, remoteUid: u) {
+                    startOffer(to: u)
+                }
+            }
+        case "offer":
+            guard let from = data["uid"] as? String, let sdp = data["sdp"] as? String else { return }
+            let pc = peerConnections[from] ?? createPeerConnection(remoteUid: from)
+            guard let pcUnwrapped = pc else { return }
+            let remote = RTCSessionDescription(type: .offer, sdp: sdp)
+            pcUnwrapped.setRemoteDescription(remote) { [weak self] _ in
+                guard let self = self else { return }
+                self.remoteSdpSetByUid.insert(from)
+                self.flushPendingRemoteIce(from: from)
+                let constraints = RTCMediaConstraints(mandatoryConstraints: ["OfferToReceiveAudio": "true"], optionalConstraints: nil)
+                pcUnwrapped.answer(for: constraints) { sdp, _ in
+                    guard let sdp = sdp else { return }
+                    pcUnwrapped.setLocalDescription(sdp) { _ in
+                        self.signalingClient?.sendAnswer(sdp: sdp.sdp, toUid: from)
+                        self.flushPendingLocalIce(to: from)
+                    }
+                }
+            }
+        case "answer":
+            guard let from = data["uid"] as? String, let sdp = data["sdp"] as? String else { return }
+            guard let pc = peerConnections[from] else { return }
+            let remote = RTCSessionDescription(type: .answer, sdp: sdp)
+            pc.setRemoteDescription(remote, completionHandler: { [weak self] _ in
+                self?.remoteSdpSetByUid.insert(from)
+                self?.flushPendingRemoteIce(from: from)
+            })
+        case "ice-candidate":
+            guard let from = data["uid"] as? String, let cand = data["candidate"] as? String else { return }
+            let mline = (data["sdpMLineIndex"] as? NSNumber)?.int32Value ?? 0
+            let mid = (data["sdpMid"] as? String) ?? ""
+            let c = RTCIceCandidate(sdp: cand, sdpMLineIndex: mline, sdpMid: mid)
+            if remoteSdpSetByUid.contains(from), let pc = peerConnections[from] {
+                pc.add(c)
+            } else {
+                pendingRemoteIceByUid[from, default: []].append(c)
+            }
+        case "user-joined":
+            if let uid = data["uid"] as? String {
+                eventHandler?.onUserJoined(uid: uid, elapsed: 0)
+                if let localUid = currentUid, uid != localUid {
+                    if peerConnections[uid] == nil { _ = createPeerConnection(remoteUid: uid) }
+                    if shouldInitiateOffer(localUid: localUid, remoteUid: uid) {
+                        startOffer(to: uid)
+                    }
+                }
+            }
+        case "user-left":
+            if let uid = data["uid"] as? String {
+                eventHandler?.onUserOffline(uid: uid, reason: "quit")
+                peerConnections.removeValue(forKey: uid)?.close()
+                offerSentByUid.remove(uid)
+                remoteSdpSetByUid.remove(uid)
+                pendingLocalIceByUid.removeValue(forKey: uid)
+                pendingRemoteIceByUid.removeValue(forKey: uid)
+            }
+        default:
+            break
+        }
+    }
+
+    private func shouldInitiateOffer(localUid: String, remoteUid: String) -> Bool {
+        return localUid < remoteUid
+    }
+
+    private func startOffer(to remoteUid: String) {
+        guard let pc = peerConnections[remoteUid] else { return }
+        if offerSentByUid.contains(remoteUid) { return }
+        offerSentByUid.insert(remoteUid)
+        let constraints = RTCMediaConstraints(
+            mandatoryConstraints: ["OfferToReceiveAudio": "true", "OfferToReceiveVideo": "false"],
+            optionalConstraints: nil
+        )
+        pc.offer(for: constraints) { [weak self] sdp, _ in
+            guard let self = self, let sdp = sdp else { return }
+            pc.setLocalDescription(sdp) { _ in
+                self.signalingClient?.sendOffer(sdp: sdp.sdp, toUid: remoteUid)
+                self.flushPendingLocalIce(to: remoteUid)
+            }
+        }
+    }
+
+    private final class PeerDelegate: NSObject, RTCPeerConnectionDelegate {
+        private weak var owner: SyRtcEngineImpl?
+        private let remoteUid: String
+
+        init(owner: SyRtcEngineImpl, remoteUid: String) {
+            self.owner = owner
+            self.remoteUid = remoteUid
+        }
+
+        func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+            guard let owner = owner else { return }
+            if owner.offerSentByUid.contains(remoteUid) || owner.remoteSdpSetByUid.contains(remoteUid) {
+                owner.signalingClient?.sendIceCandidate(candidate: candidate.sdp, sdpMLineIndex: candidate.sdpMLineIndex, sdpMid: candidate.sdpMid ?? "", toUid: remoteUid)
+            } else {
+                owner.pendingLocalIceByUid[remoteUid, default: []].append(candidate)
+            }
+        }
+
+        // 其余回调按需扩展（目前最小可用只需要 ICE candidate 转发）
+    }
+
+    private func flushPendingLocalIce(to remoteUid: String) {
+        guard let list = pendingLocalIceByUid[remoteUid], !list.isEmpty else { return }
+        pendingLocalIceByUid[remoteUid] = []
+        for c in list {
+            signalingClient?.sendIceCandidate(candidate: c.sdp, sdpMLineIndex: c.sdpMLineIndex, sdpMid: c.sdpMid ?? "", toUid: remoteUid)
+        }
+    }
+
+    private func flushPendingRemoteIce(from remoteUid: String) {
+        guard let pc = peerConnections[remoteUid] else { return }
+        guard let list = pendingRemoteIceByUid[remoteUid], !list.isEmpty else { return }
+        pendingRemoteIceByUid[remoteUid] = []
+        for c in list { pc.add(c) }
     }
     
     private func initializeWebRTC() {
