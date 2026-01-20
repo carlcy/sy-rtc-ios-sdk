@@ -1271,6 +1271,11 @@ internal class SyRtcEngineImpl {
     // MARK: - 旁路推流
     
     func startRtmpStreamWithTranscoding(url: String, transcoding: LiveTranscoding) {
+        // 当前仓库未集成稳定可用的 RTMP 推流库：仅保留 API 占位，避免“看似成功实际失败”
+        eventHandler?.onError(code: 1001, message: "RTMP 推流未集成：请先集成稳定的 RTMP 库后再启用该能力")
+        print("RTMP 推流未集成，忽略调用 startRtmpStreamWithTranscoding(url=\(url))")
+        return
+
         if rtmpStreams[url] != nil {
             print("旁路推流已在进行中: \(url)")
             return
@@ -1302,6 +1307,10 @@ internal class SyRtcEngineImpl {
     }
     
     func stopRtmpStream(url: String) {
+        eventHandler?.onError(code: 1001, message: "RTMP 推流未集成：无法停止推流")
+        print("RTMP 推流未集成，忽略调用 stopRtmpStream(url=\(url))")
+        return
+
         guard rtmpStreams[url] != nil else {
             print("旁路推流未在进行中: \(url)")
             return
@@ -1318,6 +1327,10 @@ internal class SyRtcEngineImpl {
     }
     
     func updateRtmpTranscoding(transcoding: LiveTranscoding) {
+        eventHandler?.onError(code: 1001, message: "RTMP 推流未集成：无法更新转码配置")
+        print("RTMP 推流未集成，忽略调用 updateRtmpTranscoding()")
+        return
+
         guard let url = rtmpStreams.first(where: { $0.value.width == transcoding.width && $0.value.height == transcoding.height })?.key else {
             print("未找到对应的旁路推流，无法更新转码配置")
             return
