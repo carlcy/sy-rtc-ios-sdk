@@ -13,14 +13,14 @@ let package = Package(
         ),
     ],
     dependencies: [
-        // WebRTC SPM 依赖（推荐）：这里使用官方镜像仓库
-        .package(url: "https://github.com/webrtc-sdk/webrtc.git", from: "125.6422.07")
+        // WebRTC SPM 依赖（二进制包，支持 SemVer tag）
+        .package(url: "https://github.com/stasel/WebRTC.git", from: "141.0.0")
     ],
     targets: [
         .target(
             name: "SyRtcSDK",
             dependencies: [
-                .product(name: "WebRTC", package: "webrtc")
+                .product(name: "WebRTC", package: "WebRTC")
             ],
             path: "Sources/SyRtcSDK"
         ),

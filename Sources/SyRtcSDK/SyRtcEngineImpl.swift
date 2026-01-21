@@ -61,6 +61,7 @@ internal class SyRtcEngineImpl {
     // 信令
     private var signalingClient: SyRtcSignalingClient?
     private var signalingUrl: String = "ws://47.105.48.196/ws/signaling"
+    private var apiBaseUrl: String?
     private var currentChannelId: String?
     private var currentUid: String?
     private var currentToken: String?
@@ -71,9 +72,8 @@ internal class SyRtcEngineImpl {
     private var pendingLocalIceByUid: [String: [RTCIceCandidate]] = [:]
     private var pendingRemoteIceByUid: [String: [RTCIceCandidate]] = [:]
     
-    // 旁路推流
+    // 旁路推流：采用服务端 egress（/api/rtc/live/*），不在客户端实现 RTMP 连接/编码
     private var rtmpStreams: [String: LiveTranscoding] = [:]
-    private var rtmpSessions: [String: RtmpStreamSession] = [:]
     
     // 屏幕共享
     private var screenRecorder: RPScreenRecorder?
@@ -105,6 +105,69 @@ internal class SyRtcEngineImpl {
         if !url.isEmpty {
             signalingUrl = url
         }
+    }
+
+    func setApiBaseUrl(_ url: String) {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        apiBaseUrl = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+    }
+
+    private func postLiveApi(path: String, body: [String: Any]) {
+        guard let base = apiBaseUrl, !base.isEmpty else {
+            eventHandler?.onError(code: 1001, message: "API_BASE_URL 未设置：请先调用 setApiBaseUrl()")
+            return
+        }
+        guard let token = currentToken, !token.isEmpty else {
+            eventHandler?.onError(code: 1001, message: "缺少登录 token：join() 传入的 token 为空，无法调用直播控制接口")
+            return
+        }
+        guard let url = URL(string: base + path) else {
+            eventHandler?.onError(code: 1001, message: "API URL 无效")
+            return
+        }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 8.0
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue(self?.appId ?? "", forHTTPHeaderField: "X-App-Id")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+            let sema = DispatchSemaphore(value: 0)
+            var statusCode: Int = -1
+            var respText: String = ""
+            URLSession.shared.dataTask(with: request) { data, resp, err in
+                if let http = resp as? HTTPURLResponse { statusCode = http.statusCode }
+                if let data = data { respText = String(data: data, encoding: .utf8) ?? "" }
+                if let err = err {
+                    self?.eventHandler?.onError(code: 1001, message: "直播接口异常: \(err.localizedDescription)")
+                } else if !(200...299).contains(statusCode) {
+                    self?.eventHandler?.onError(code: 1001, message: "直播接口失败: \(statusCode) \(respText)")
+                }
+                sema.signal()
+            }.resume()
+            _ = sema.wait(timeout: .now() + 10)
+        }
+    }
+
+    private func guessLayout(from transcoding: LiveTranscoding) -> [String: Any] {
+        let users = transcoding.transcodingUsers ?? []
+        guard !users.isEmpty else {
+            return ["mode": "host-main", "hostUid": currentUid ?? "", "side": "right"]
+        }
+        let sorted = users.sorted { ($0.width * $0.height) > ($1.width * $1.height) }
+        let top1 = sorted.first
+        let top2 = sorted.dropFirst().first
+        if let a = top1, let b = top2 {
+            let area1 = a.width * a.height
+            let area2 = b.width * b.height
+            let ratio: Double = area2 <= 0 ? 999.0 : (area1 / area2)
+            if ratio < 1.2 {
+                return ["mode": "pk", "pkUids": [a.uid, b.uid]]
+            }
+        }
+        return ["mode": "host-main", "hostUid": top1?.uid ?? (currentUid ?? ""), "side": "right"]
     }
 
     // MARK: - 频道（多人语聊 Mesh）
@@ -156,7 +219,7 @@ internal class SyRtcEngineImpl {
         pendingLocalIceByUid[remoteUid] = []
         pendingRemoteIceByUid[remoteUid] = []
         // add tracks
-        if let track = localAudioTrack { pc.add(track, streamIds: ["stream"]) }
+        if let track = localAudioTrack { pc?.add(track, streamIds: ["stream"]) }
         return pc
     }
 
@@ -1271,82 +1334,40 @@ internal class SyRtcEngineImpl {
     // MARK: - 旁路推流
     
     func startRtmpStreamWithTranscoding(url: String, transcoding: LiveTranscoding) {
-        // 当前仓库未集成稳定可用的 RTMP 推流库：仅保留 API 占位，避免“看似成功实际失败”
-        eventHandler?.onError(code: 1001, message: "RTMP 推流未集成：请先集成稳定的 RTMP 库后再启用该能力")
-        print("RTMP 推流未集成，忽略调用 startRtmpStreamWithTranscoding(url=\(url))")
-        return
-
-        if rtmpStreams[url] != nil {
-            print("旁路推流已在进行中: \(url)")
+        guard !url.isEmpty else { return }
+        guard let channelId = currentChannelId, !channelId.isEmpty else {
+            eventHandler?.onError(code: 1001, message: "未加入频道，无法开播")
             return
         }
-        
+        let pubs = (transcoding.transcodingUsers ?? []).map { $0.uid }
+        let publishers = pubs.isEmpty ? [currentUid ?? ""] : Array(Set(pubs)).filter { !$0.isEmpty }
+        let body: [String: Any] = [
+            "channelId": channelId,
+            "publishers": publishers,
+            "rtmpUrls": [url],
+            "video": ["outW": transcoding.width, "outH": transcoding.height, "fps": transcoding.videoFramerate, "bitrateKbps": transcoding.videoBitrate],
+            "audio": ["sampleRate": 48000, "channels": 2, "bitrateKbps": 128],
+            "layout": guessLayout(from: transcoding)
+        ]
+        postLiveApi(path: "/api/rtc/live/start", body: body)
         rtmpStreams[url] = transcoding
-        print("开始旁路推流: url=\(url), width=\(transcoding.width), height=\(transcoding.height), bitrate=\(transcoding.videoBitrate)")
-        
-        // 创建RTMP推流会话
-        let session = RtmpStreamSession(
-            url: url,
-            width: transcoding.width,
-            height: transcoding.height,
-            frameRate: transcoding.videoFramerate,
-            bitrate: transcoding.videoBitrate * 1000
-        )
-        rtmpSessions[url] = session
-        
-        // 从本地视频轨道获取帧并推流
-        if let track = localVideoTrack {
-            track.add(BeautyFilterVideoSink { [weak self] frame in
-                self?.rtmpSessions[url]?.processVideoFrame(frame)
-            })
-        }
-        
-        // 启动RTMP推流
-        session.start()
-        print("RTMP推流已启动: \(url)")
     }
     
     func stopRtmpStream(url: String) {
-        eventHandler?.onError(code: 1001, message: "RTMP 推流未集成：无法停止推流")
-        print("RTMP 推流未集成，忽略调用 stopRtmpStream(url=\(url))")
-        return
-
-        guard rtmpStreams[url] != nil else {
-            print("旁路推流未在进行中: \(url)")
-            return
-        }
-        
-        // 停止RTMP推流会话
-        rtmpSessions[url]?.stop()
-        
-        // 清理资源
+        guard !url.isEmpty else { return }
+        guard let channelId = currentChannelId, !channelId.isEmpty else { return }
+        postLiveApi(path: "/api/rtc/live/stop", body: ["channelId": channelId])
         rtmpStreams.removeValue(forKey: url)
-        rtmpSessions.removeValue(forKey: url)
-        
-        print("RTMP推流已停止: \(url)")
     }
     
     func updateRtmpTranscoding(transcoding: LiveTranscoding) {
-        eventHandler?.onError(code: 1001, message: "RTMP 推流未集成：无法更新转码配置")
-        print("RTMP 推流未集成，忽略调用 updateRtmpTranscoding()")
-        return
-
-        guard let url = rtmpStreams.first(where: { $0.value.width == transcoding.width && $0.value.height == transcoding.height })?.key else {
-            print("未找到对应的旁路推流，无法更新转码配置")
-            return
-        }
-        
-        rtmpStreams[url] = transcoding
-        print("更新旁路推流转码配置: width=\(transcoding.width), height=\(transcoding.height), bitrate=\(transcoding.videoBitrate)")
-        
-        // 更新RTMP推流会话配置
-        rtmpSessions[url]?.updateConfig(
-            width: transcoding.width,
-            height: transcoding.height,
-            frameRate: transcoding.videoFramerate,
-            bitrate: transcoding.videoBitrate * 1000
-        )
-        print("RTMP推流转码配置已更新")
+        guard let channelId = currentChannelId, !channelId.isEmpty else { return }
+        let body: [String: Any] = [
+            "channelId": channelId,
+            "video": ["outW": transcoding.width, "outH": transcoding.height, "fps": transcoding.videoFramerate, "bitrateKbps": transcoding.videoBitrate],
+            "layout": guessLayout(from: transcoding)
+        ]
+        postLiveApi(path: "/api/rtc/live/update", body: body)
     }
     
     // MARK: - 清理
@@ -1360,9 +1381,7 @@ internal class SyRtcEngineImpl {
         videoCapturer = nil
         peerConnectionFactory = nil
         
-        // 释放RTMP资源
-        rtmpSessions.values.forEach { $0.stop() }
-        rtmpSessions.removeAll()
+        // 旁路推流改为服务端 egress：本地无需释放 RTMP 连接/编码资源
         
         // 释放屏幕共享资源
         screenRecorder?.stopCapture { _ in }
@@ -1579,61 +1598,6 @@ private class FrameCapturer: NSObject, RTCVideoRenderer {
 }
 
 // MARK: - SyRtcEngineImpl扩展
-
-// MARK: - RTMP推流会话类
-
-private class RtmpStreamSession {
-    let url: String
-    var width: Int
-    var height: Int
-    var frameRate: Int
-    var bitrate: Int
-    private var isStreaming = false
-    
-    init(url: String, width: Int, height: Int, frameRate: Int, bitrate: Int) {
-        self.url = url
-        self.width = width
-        self.height = height
-        self.frameRate = frameRate
-        self.bitrate = bitrate
-    }
-    
-    func start() {
-        isStreaming = true
-        // 实际实现需要：
-        // 1. 连接RTMP服务器（可以使用librtmp或FFmpeg）
-        // 2. 初始化视频编码器（H.264）
-        // 3. 初始化音频编码器（AAC）
-        print("RTMP推流会话已启动: \(url)")
-    }
-    
-    func stop() {
-        isStreaming = false
-        // 实际实现需要：
-        // 1. 停止编码器
-        // 2. 断开RTMP连接
-        // 3. 释放资源
-        print("RTMP推流会话已停止: \(url)")
-    }
-    
-    func processVideoFrame(_ frame: RTCVideoFrame) {
-        if !isStreaming { return }
-        
-        // 实际实现需要：
-        // 1. 将RTCVideoFrame转换为H.264编码
-        // 2. 将编码后的数据推送到RTMP服务器
-        // 这里简化处理，实际需要使用VideoToolbox或FFmpeg进行编码
-    }
-    
-    func updateConfig(width: Int, height: Int, frameRate: Int, bitrate: Int) {
-        self.width = width
-        self.height = height
-        self.frameRate = frameRate
-        self.bitrate = bitrate
-        // 实际实现需要重新配置编码器
-        print("RTMP推流配置已更新: \(width)x\(height), \(frameRate)fps, \(bitrate)bps")
-    }
-}
 
 // MARK: - 美颜滤镜类
 

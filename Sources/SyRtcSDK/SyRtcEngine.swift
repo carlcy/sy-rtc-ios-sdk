@@ -76,6 +76,11 @@ public class SyRtcEngine {
     public func setSignalingServerUrl(_ url: String) {
         impl?.setSignalingServerUrl(url)
     }
+
+    /// 设置后端 API Base URL（用于直播旁路：开播/关播/切布局/更新转码等）
+    public func setApiBaseUrl(_ url: String) {
+        impl?.setApiBaseUrl(url)
+    }
     
     /// 启用视频模块
     public func enableVideo() {
