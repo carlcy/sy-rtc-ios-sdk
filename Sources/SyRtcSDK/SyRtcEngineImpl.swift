@@ -1334,23 +1334,29 @@ internal class SyRtcEngineImpl {
     // MARK: - 旁路推流
     
     func startRtmpStreamWithTranscoding(url: String, transcoding: LiveTranscoding) {
-        guard !url.isEmpty else { return }
         guard let channelId = currentChannelId, !channelId.isEmpty else {
             eventHandler?.onError(code: 1001, message: "未加入频道，无法开播")
             return
         }
         let pubs = (transcoding.transcodingUsers ?? []).map { $0.uid }
         let publishers = pubs.isEmpty ? [currentUid ?? ""] : Array(Set(pubs)).filter { !$0.isEmpty }
+        
+        // 如果url为空，使用空数组，后端会自动生成我们服务器的RTMP地址
+        let rtmpUrls: [String] = url.isEmpty ? [] : [url]
+        
         let body: [String: Any] = [
             "channelId": channelId,
             "publishers": publishers,
-            "rtmpUrls": [url],
+            "rtmpUrls": rtmpUrls,
             "video": ["outW": transcoding.width, "outH": transcoding.height, "fps": transcoding.videoFramerate, "bitrateKbps": transcoding.videoBitrate],
             "audio": ["sampleRate": 48000, "channels": 2, "bitrateKbps": 128],
             "layout": guessLayout(from: transcoding)
         ]
         postLiveApi(path: "/api/rtc/live/start", body: body)
-        rtmpStreams[url] = transcoding
+        
+        // 如果url为空，使用生成的地址（从响应中获取，或使用默认格式）
+        let finalUrl = url.isEmpty ? "auto_generated_\(channelId)" : url
+        rtmpStreams[finalUrl] = transcoding
     }
     
     func stopRtmpStream(url: String) {
