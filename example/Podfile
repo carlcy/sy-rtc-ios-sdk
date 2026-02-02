@@ -6,5 +6,5 @@ target 'SyRtcSDKExample' do
   pod 'SyRtcSDK', :path => '../'
   
   # 或使用远程Pod
-  # pod 'SyRtcSDK', '~> 1.0.0'
+  # pod 'SyRtcSDK', '~> 1.2.0'
 end

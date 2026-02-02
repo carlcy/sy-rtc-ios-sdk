@@ -24,7 +24,7 @@ pod trunk push SyRtcSDK.podspec
 
 在 `Podfile` 中添加：
 ```ruby
-pod 'SyRtcSDK', '~> 1.0.0'
+pod 'SyRtcSDK', '~> 1.2.0'
 ```
 
 ## 发布到 Swift Package Manager
@@ -42,8 +42,8 @@ git push -u origin main
 ### 2. 创建 Release Tag
 
 ```bash
-git tag 1.0.0
-git push origin 1.0.0
+git tag 1.2.0
+git push origin 1.2.0
 ```
 
 ### 3. 在 Xcode 中使用

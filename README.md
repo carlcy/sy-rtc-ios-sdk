@@ -19,7 +19,7 @@ SY RTC iOS SDK 是一个用于实时语音通信的 iOS 原生 SDK。
    ```
    https://github.com/carlcy/sy-rtc-ios-sdk.git
    ```
-4. 选择版本（如 `1.0.5`）
+4. 选择版本（如 `1.2.0`）
 5. 点击 **Add Package**
 
 ### 方式二：使用 CocoaPods
@@ -33,7 +33,7 @@ SY RTC iOS SDK 是一个用于实时语音通信的 iOS 原生 SDK。
    use_frameworks!
 
    target 'YourApp' do
-     pod 'SyRtcSDK', '~> 1.0.5'
+     pod 'SyRtcSDK', '~> 1.2.0'
    end
    ```
 
@@ -505,7 +505,7 @@ platform :ios, '13.0'
 use_frameworks!
 
 target 'YourApp' do
-  pod 'SyRtcSDK', '~> 1.0.5'
+  pod 'SyRtcSDK', '~> 1.2.0'
 end
 ```
 
