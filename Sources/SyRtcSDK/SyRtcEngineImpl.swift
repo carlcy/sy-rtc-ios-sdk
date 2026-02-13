@@ -64,13 +64,20 @@ internal class SyRtcEngineImpl {
     private var apiBaseUrl: String?
     private var currentChannelId: String?
     private var currentUid: String?
+    // join() 传入的是 RTC Token（用于加入频道）
     private var currentToken: String?
+    // 后端 API 认证用的 JWT（用于 /api/rtc/live/* 等）
+    private var apiAuthToken: String?
     
     // 多人语聊（Mesh）：每个远端用户一条 PeerConnection（key=remoteUid）
     private var offerSentByUid: Set<String> = []
     private var remoteSdpSetByUid: Set<String> = []
     private var pendingLocalIceByUid: [String: [RTCIceCandidate]] = [:]
     private var pendingRemoteIceByUid: [String: [RTCIceCandidate]] = [:]
+
+    private func guessRemoteUid() -> String {
+        return peerConnections.keys.first(where: { $0 != "default" }) ?? ""
+    }
     
     // 旁路推流：采用服务端 egress（/api/rtc/live/*），不在客户端实现 RTMP 连接/编码
     private var rtmpStreams: [String: LiveTranscoding] = [:]
@@ -112,13 +119,18 @@ internal class SyRtcEngineImpl {
         apiBaseUrl = trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
     }
 
+    func setApiAuthToken(_ token: String) {
+        apiAuthToken = token
+    }
+
     private func postLiveApi(path: String, body: [String: Any]) {
         guard let base = apiBaseUrl, !base.isEmpty else {
             eventHandler?.onError(code: 1001, message: "API_BASE_URL 未设置：请先调用 setApiBaseUrl()")
             return
         }
-        guard let token = currentToken, !token.isEmpty else {
-            eventHandler?.onError(code: 1001, message: "缺少登录 token：join() 传入的 token 为空，无法调用直播控制接口")
+        let token = (apiAuthToken?.isEmpty == false) ? apiAuthToken : currentToken
+        guard let token = token, !token.isEmpty else {
+            eventHandler?.onError(code: 1001, message: "缺少登录 token：请先调用 setApiAuthToken() 或在 join() 后设置")
             return
         }
         guard let url = URL(string: base + path) else {
@@ -176,6 +188,12 @@ internal class SyRtcEngineImpl {
 
     // MARK: - 频道（多人语聊 Mesh）
     func join(channelId: String, uid: String, token: String) {
+        guard !channelId.trimmingCharacters(in: .whitespaces).isEmpty,
+              !uid.trimmingCharacters(in: .whitespaces).isEmpty,
+              !token.trimmingCharacters(in: .whitespaces).isEmpty else {
+            eventHandler?.onError(1000, "channelId/uid/token 不能为空")
+            return
+        }
         currentChannelId = channelId
         currentUid = uid
         currentToken = token
@@ -452,6 +470,7 @@ internal class SyRtcEngineImpl {
     }
     
     func enableLocalAudio(_ enabled: Bool) {
+        localAudioTrack?.isEnabled = enabled
         if enabled {
             do {
                 try audioEngine?.start()
@@ -466,8 +485,8 @@ internal class SyRtcEngineImpl {
     }
     
     func muteLocalAudio(_ muted: Bool) {
+        localAudioTrack?.isEnabled = !muted
         print("本地音频静音: \(muted)")
-        // 静音逻辑
     }
     
     func muteRemoteAudioStream(uid: String, muted: Bool) {
@@ -599,6 +618,7 @@ internal class SyRtcEngineImpl {
     }
     
     func enableAudio() {
+        localAudioTrack?.isEnabled = true
         do {
             try audioEngine?.start()
             print("启用音频模块")
@@ -608,6 +628,7 @@ internal class SyRtcEngineImpl {
     }
     
     func disableAudio() {
+        localAudioTrack?.isEnabled = false
         audioEngine?.stop()
         print("禁用音频模块")
     }
@@ -1278,7 +1299,7 @@ internal class SyRtcEngineImpl {
         dataChannelMap[streamId] = dataChannel
         
         // 设置DataChannel回调
-        dataChannel.delegate = DataChannelDelegate(streamId: streamId)
+        dataChannel.delegate = DataChannelDelegate(streamId: streamId, engine: self)
         
         dataStreams[streamId] = true
         print("创建数据流: streamId=\(streamId), reliable=\(reliable), ordered=\(ordered), state=\(dataChannel.readyState)")
@@ -1309,13 +1330,17 @@ internal class SyRtcEngineImpl {
     
     private class DataChannelDelegate: NSObject, RTCDataChannelDelegate {
         let streamId: Int
+        weak var engine: SyRtcEngineImpl?
         
-        init(streamId: Int) {
+        init(streamId: Int, engine: SyRtcEngineImpl) {
             self.streamId = streamId
+            self.engine = engine
         }
         
         func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
-            print("收到DataChannel消息: streamId=\(streamId), size=\(buffer.data.count) bytes")
+            let uid = engine?.guessRemoteUid() ?? ""
+            print("收到DataChannel消息: streamId=\(streamId), size=\(buffer.data.count) bytes, uid=\(uid)")
+            engine?.eventHandler?.onStreamMessage(uid: uid, streamId: streamId, data: buffer.data)
         }
         
         func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
