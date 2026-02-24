@@ -60,7 +60,7 @@ internal class SyRtcEngineImpl {
 
     // 信令
     private var signalingClient: SyRtcSignalingClient?
-    private var signalingUrl: String = "ws://47.105.48.196/ws/signaling"
+    private var signalingUrl: String = "wss://syrtcapi.shengyuchenyao.cn/ws/signaling"
     private var apiBaseUrl: String?
     private var currentChannelId: String?
     private var currentUid: String?
@@ -191,7 +191,7 @@ internal class SyRtcEngineImpl {
         guard !channelId.trimmingCharacters(in: .whitespaces).isEmpty,
               !uid.trimmingCharacters(in: .whitespaces).isEmpty,
               !token.trimmingCharacters(in: .whitespaces).isEmpty else {
-            eventHandler?.onError(1000, "channelId/uid/token 不能为空")
+            eventHandler?.onError(code: 1000, message: "channelId/uid/token 不能为空")
             return
         }
         currentChannelId = channelId

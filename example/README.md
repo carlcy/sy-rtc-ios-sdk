@@ -1,45 +1,55 @@
 # iOS SDK Demo
 
-这是一个完整的 iOS SDK 使用示例项目。
+这是一个完整的 iOS SDK 使用示例项目，使用纯代码 UI（无 Storyboard）。
 
 ## 📁 项目结构
 
 ```
 example/
+├── SyRtcSDKExample.xcodeproj/    # Xcode 项目
+├── SyRtcSDKExample.xcworkspace   # CocoaPods 工作空间（用此打开）
 ├── SyRtcSDKExample/
-│   ├── ViewController.swift
-│   ├── AppDelegate.swift
+│   ├── ViewController.swift      # 主界面（程序化 UI）
+│   ├── AppDelegate.swift         # 应用入口
 │   └── Info.plist
-└── Podfile
+├── Podfile
+└── Podfile.lock
 ```
 
 ## 🚀 快速开始
 
 ### 1. 安装依赖
 
-使用 CocoaPods：
-
 ```bash
+cd example
 pod install
 ```
 
-或使用 Swift Package Manager（在 Xcode 中添加包依赖）
+### 2. 打开项目
 
-### 2. 添加权限
+**重要**：请使用 `.xcworkspace` 打开，不要使用 `.xcodeproj`：
 
-在 `Info.plist` 中添加：
-
-```xml
-<key>NSMicrophoneUsageDescription</key>
-<string>需要麦克风权限进行语音通话</string>
-<key>NSCameraUsageDescription</key>
-<string>需要摄像头权限进行视频通话</string>
+```bash
+open SyRtcSDKExample.xcworkspace
 ```
 
-### 3. 使用示例
+### 3. 构建
 
-参考 `SyRtcSDKExample/ViewController.swift`
+在 Xcode 中选择模拟器或真机，按 Cmd+B 构建。
 
-## 📝 完整示例代码
+或使用命令行：
 
-详见 README.md 中的示例代码部分。
+```bash
+xcodebuild -workspace SyRtcSDKExample.xcworkspace \
+  -scheme SyRtcSDKExample \
+  -sdk iphonesimulator \
+  -configuration Debug build
+```
+
+### 4. 权限
+
+`Info.plist` 已包含麦克风和摄像头权限说明。
+
+## 📝 使用示例
+
+参考 `SyRtcSDKExample/ViewController.swift`。应用提供初始化、加入/离开房间、音频控制、视频预览等按钮。
