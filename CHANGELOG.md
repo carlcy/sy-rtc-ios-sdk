@@ -1,5 +1,31 @@
 # SY RTC iOS SDK 更新日志
 
+## 2.0.0 (Breaking Change)
+
+### 架构调整
+
+SDK 重新定位为纯 RTC 传输层，移除所有业务逻辑，对齐声网/即构等主流 RTC SDK 设计。
+
+### 移除
+
+- 房间管理、麦位管理、用户管理（踢人/禁言/封禁）、聊天、礼物等业务 API 及回调
+
+### 新增
+
+- 频道生命周期回调：`onJoinChannelSuccess`、`onLeaveChannel`、`onRejoinChannelSuccess`
+- 连接与网络：`onConnectionStateChanged`、`onNetworkQuality`、`onRtcStats`
+- Token 管理：`onTokenPrivilegeWillExpire`、`onRequestToken`、`renewToken()`
+- 音频状态：`onLocalAudioStateChanged`、`onRemoteAudioStateChanged`、`onUserMuteAudio`、`onAudioRoutingChanged`
+- 视频状态：`onLocalVideoStateChanged`、`onRemoteVideoStateChanged`、`onFirstRemoteVideoDecoded`、`onFirstRemoteVideoFrame`、`onVideoSizeChanged`
+- 数据流：`createDataStream`、`sendStreamMessage`、`onStreamMessage`、`onStreamMessageError`
+- Flutter 插件 iOS 端修复：`sendChannelMessage` 方法补齐、`release()` 正确释放 impl
+
+### 迁移指南
+
+业务逻辑请通过 `sendChannelMessage` 自定义 JSON 协议实现。
+
+---
+
 ## 1.5.0
 
 ### 新功能

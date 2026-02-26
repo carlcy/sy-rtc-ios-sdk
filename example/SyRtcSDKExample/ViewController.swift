@@ -356,6 +356,84 @@ class ViewController: UIViewController {
 }
 
 extension ViewController: SyRtcEventHandler {
+    // MARK: - Channel lifecycle
+    func onJoinChannelSuccess(channelId: String, uid: String, elapsed: Int) {
+        DispatchQueue.main.async {
+            self.appendLog("加入频道成功: \(channelId) (\(uid), \(elapsed) ms)")
+            self.statusLabel.text = "已加入频道: \(channelId)"
+        }
+    }
+
+    func onLeaveChannel(stats: [String: Any]) {
+        DispatchQueue.main.async {
+            self.appendLog("已离开频道")
+            self.statusLabel.text = "已离开频道"
+        }
+    }
+
+    func onRejoinChannelSuccess(channelId: String, uid: String, elapsed: Int) {
+        DispatchQueue.main.async {
+            self.appendLog("重连成功")
+            self.statusLabel.text = "重连成功"
+        }
+    }
+
+    // MARK: - Connection & network
+    func onConnectionStateChanged(state: String, reason: String) {
+        DispatchQueue.main.async {
+            self.appendLog("连接状态变化: state=\(state) reason=\(reason)")
+        }
+    }
+
+    func onNetworkQuality(uid: String, txQuality: String, rxQuality: String) {
+        let isPoor = txQuality.lowercased().contains("poor") || rxQuality.lowercased().contains("poor")
+        guard isPoor else { return }
+        DispatchQueue.main.async {
+            self.appendLog("网络质量差: uid=\(uid) tx=\(txQuality) rx=\(rxQuality)")
+        }
+    }
+
+    // MARK: - Audio state
+    func onUserMuteAudio(uid: String, muted: Bool) {
+        DispatchQueue.main.async {
+            self.appendLog("远端用户静音: uid=\(uid) muted=\(muted)")
+        }
+    }
+
+    func onLocalAudioStateChanged(state: String, error: String) {
+        DispatchQueue.main.async {
+            self.appendLog("本地音频状态: state=\(state) error=\(error)")
+        }
+    }
+
+    func onRemoteAudioStateChanged(uid: String, state: String, reason: String, elapsed: Int) {
+        DispatchQueue.main.async {
+            self.appendLog("远端音频状态: uid=\(uid) state=\(state) reason=\(reason)")
+        }
+    }
+
+    func onAudioRoutingChanged(routing: Int) {
+        DispatchQueue.main.async {
+            self.appendLog("音频路由变化: routing=\(routing)")
+        }
+    }
+
+    // MARK: - Token
+    func onTokenPrivilegeWillExpire() {
+        DispatchQueue.main.async {
+            self.appendLog("⚠️ Token即将过期，请刷新")
+        }
+    }
+
+    // MARK: - Error
+    func onError(code: Int, message: String) {
+        DispatchQueue.main.async {
+            self.appendLog("错误: code=\(code) message=\(message)")
+            self.statusLabel.text = "错误: \(message)"
+        }
+    }
+
+    // MARK: - User events (existing)
     func onUserJoined(uid: String, elapsed: Int) {
         DispatchQueue.main.async {
             self.appendLog("事件: 用户加入 uid=\(uid) elapsed=\(elapsed)ms")
@@ -363,14 +441,14 @@ extension ViewController: SyRtcEventHandler {
             self.engine?.setupRemoteVideo(uid: uid, viewId: self.remoteVideoView.hash)
         }
     }
-    
+
     func onUserOffline(uid: String, reason: String) {
         DispatchQueue.main.async {
             self.appendLog("事件: 用户离开 uid=\(uid) reason=\(reason)")
             self.statusLabel.text = "用户离开: \(uid)"
         }
     }
-    
+
     func onVolumeIndication(speakers: [SyVolumeInfo]) {
         DispatchQueue.main.async {
             if let first = speakers.first {

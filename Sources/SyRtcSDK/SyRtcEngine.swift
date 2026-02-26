@@ -337,45 +337,6 @@ public class SyRtcEngine {
         impl?.updateRtmpTranscoding(transcoding: transcoding)
     }
 
-    // MARK: - Room / Seat / User / Chat / Gift
-
-    private func sendRoomAction(_ action: String, _ data: [String: Any?]) {
-        let filtered = data.compactMapValues { $0 }
-        let msg: [String: Any] = ["_sy_type": "room-msg", "action": action, "data": filtered]
-        if let jsonData = try? JSONSerialization.data(withJSONObject: msg),
-           let jsonStr = String(data: jsonData, encoding: .utf8) {
-            impl?.sendChannelMessage(jsonStr)
-        }
-    }
-
-    // Room management
-    public func updateRoomInfo(_ roomInfo: [String: Any]) { sendRoomAction("room-info-update", ["roomInfo": roomInfo]) }
-    public func setRoomNotice(_ notice: String) { sendRoomAction("room-notice-update", ["notice": notice]) }
-    public func setRoomManager(uid: String, isManager: Bool) { sendRoomAction("manager-update", ["uid": uid, "isManager": isManager]) }
-
-    // Seat management
-    public func takeSeat(_ seatIndex: Int) { sendRoomAction("seat-take", ["seatIndex": seatIndex]) }
-    public func leaveSeat() { sendRoomAction("seat-leave", [:]) }
-    public func requestSeat(seatIndex: Int? = nil) { sendRoomAction("seat-request", ["seatIndex": seatIndex]) }
-    public func cancelSeatRequest() { sendRoomAction("seat-request-cancel", [:]) }
-    public func handleSeatRequest(uid: String, approved: Bool, seatIndex: Int? = nil) { sendRoomAction("seat-request-handle", ["uid": uid, "approved": approved, "seatIndex": seatIndex]) }
-    public func inviteToSeat(uid: String, seatIndex: Int) { sendRoomAction("seat-invite", ["uid": uid, "seatIndex": seatIndex]) }
-    public func handleSeatInvitation(accepted: Bool, seatIndex: Int) { sendRoomAction("seat-invite-handle", ["accepted": accepted, "seatIndex": seatIndex]) }
-    public func kickFromSeat(uid: String) { sendRoomAction("seat-kick", ["uid": uid]) }
-    public func lockSeat(_ seatIndex: Int) { sendRoomAction("seat-lock", ["seatIndex": seatIndex, "locked": true]) }
-    public func unlockSeat(_ seatIndex: Int) { sendRoomAction("seat-lock", ["seatIndex": seatIndex, "locked": false]) }
-    public func muteSeat(_ seatIndex: Int) { sendRoomAction("seat-mute", ["seatIndex": seatIndex, "muted": true]) }
-    public func unmuteSeat(_ seatIndex: Int) { sendRoomAction("seat-mute", ["seatIndex": seatIndex, "muted": false]) }
-
-    // User management
-    public func kickUser(_ uid: String) { sendRoomAction("user-kick", ["uid": uid]) }
-    public func muteUser(uid: String, muted: Bool) { sendRoomAction("user-mute", ["uid": uid, "muted": muted]) }
-    public func banUser(uid: String, banned: Bool) { sendRoomAction("user-ban", ["uid": uid, "banned": banned]) }
-
-    // Chat & Gift
-    public func sendRoomMessage(_ content: String, messageType: String = "text", extra: [String: Any]? = nil) { sendRoomAction("room-chat", ["messageType": messageType, "content": content, "extra": extra]) }
-    public func sendGift(giftId: String, toUid: String, count: Int, extra: [String: Any]? = nil) { sendRoomAction("gift", ["giftId": giftId, "toUid": toUid, "count": count, "extra": extra]) }
-
     // MARK: - 释放
 
     public func release() {

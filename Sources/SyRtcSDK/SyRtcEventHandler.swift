@@ -54,6 +54,31 @@ public protocol SyRtcEventHandler: AnyObject {
     func onChannelMessage(uid: String, message: String)
 }
 
+// MARK: - Optional callbacks (default empty implementations)
+
+/// 默认实现：保持向后兼容（实现方可选择不实现以下可选回调）
+public extension SyRtcEventHandler {
+    func onJoinChannelSuccess(channelId: String, uid: String, elapsed: Int) {}
+    func onLeaveChannel(stats: [String: Any]) {}
+    func onRejoinChannelSuccess(channelId: String, uid: String, elapsed: Int) {}
+    func onRtcStats(stats: [String: Any]) {}
+    func onUserMuteAudio(uid: String, muted: Bool) {}
+    func onConnectionStateChanged(state: String, reason: String) {}
+    func onNetworkQuality(uid: String, txQuality: String, rxQuality: String) {}
+    func onTokenPrivilegeWillExpire() {}
+    func onRequestToken() {}
+    func onLocalAudioStateChanged(state: String, error: String) {}
+    func onRemoteAudioStateChanged(uid: String, state: String, reason: String, elapsed: Int) {}
+    func onLocalVideoStateChanged(state: String, error: String) {}
+    func onRemoteVideoStateChanged(uid: String, state: String, reason: String, elapsed: Int) {}
+    func onFirstRemoteVideoDecoded(uid: String, width: Int, height: Int, elapsed: Int) {}
+    func onFirstRemoteVideoFrame(uid: String, width: Int, height: Int, elapsed: Int) {}
+    func onVideoSizeChanged(uid: String, width: Int, height: Int, rotation: Int) {}
+    func onAudioRoutingChanged(routing: Int) {}
+    func onAudioPublishStateChanged(channelId: String, oldState: String, newState: String, elapsed: Int) {}
+    func onAudioSubscribeStateChanged(channelId: String, uid: String, oldState: String, newState: String, elapsed: Int) {}
+}
+
 /// 音量信息
 public struct SyVolumeInfo {
     public let uid: String
@@ -71,25 +96,4 @@ public extension SyRtcEventHandler {
     func onStreamMessage(uid: String, streamId: Int, data: Data) {}
     func onStreamMessageError(uid: String, streamId: Int, code: Int, missed: Int, cached: Int) {}
     func onChannelMessage(uid: String, message: String) {}
-    
-    // Room management
-    func onRoomInfoUpdated(operatorUid: String, roomInfo: [String: Any]) {}
-    func onRoomNoticeUpdated(operatorUid: String, notice: String) {}
-    func onRoomManagerUpdated(uid: String, isManager: Bool, operatorUid: String) {}
-    
-    // Seat management
-    func onSeatUpdated(seatIndex: Int, uid: String?, operatorUid: String, action: String) {}
-    func onSeatRequestReceived(uid: String, seatIndex: Int?) {}
-    func onSeatRequestHandled(operatorUid: String, approved: Bool, seatIndex: Int?) {}
-    func onSeatInvitationReceived(operatorUid: String, seatIndex: Int) {}
-    func onSeatInvitationHandled(uid: String, accepted: Bool, seatIndex: Int) {}
-    
-    // User management
-    func onUserKicked(uid: String, operatorUid: String) {}
-    func onUserMuted(uid: String, isMuted: Bool, operatorUid: String) {}
-    func onUserBanned(uid: String, isBanned: Bool, operatorUid: String) {}
-    
-    // Chat & Gift
-    func onRoomMessage(uid: String, messageType: String, content: String, extra: [String: Any]?) {}
-    func onGiftReceived(fromUid: String, toUid: String, giftId: String, count: Int, extra: [String: Any]?) {}
 }
