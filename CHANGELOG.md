@@ -1,5 +1,19 @@
 # SY RTC iOS SDK 更新日志
 
+## 1.4.1
+
+### 修复
+
+- **adjustRecordingSignalVolume**：修复公开 API 委托到错误方法（playback 而非 recording）的问题
+- **Demo 地址**：SDK 默认信令地址和示例 App 改回 IP 直连（域名备案进行中）
+
+### 升级说明
+
+- CocoaPods：`pod 'SyRtcSDK', '~> 1.4.1'`
+- SPM：选择 tag `v1.4.1`
+
+---
+
 ## 1.4.0
 
 ### 新功能

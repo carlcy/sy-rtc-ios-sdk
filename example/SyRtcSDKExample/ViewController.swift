@@ -217,8 +217,8 @@ class ViewController: UIViewController {
     
     private let demoAppId = "APP1769003318261114285E3"
     private let demoAppSecret = "524d401de4c34ad1b554f2b35fe74d6f4f8f7e55614146069b527c1f8799b488"
-    private let demoApiBase = "https://syrtcapi.shengyuchenyao.cn/demo-api"
-    private let demoSignalingUrl = "wss://syrtcapi.shengyuchenyao.cn/ws/signaling"
+    private let demoApiBase = "http://47.105.48.196/demo-api"
+    private let demoSignalingUrl = "ws://47.105.48.196/ws/signaling"
     
     @objc private func initButtonTapped() {
         appendLog("初始化引擎 appId=\(demoAppId.prefix(10))...")

@@ -60,7 +60,7 @@ internal class SyRtcEngineImpl {
 
     // 信令
     private var signalingClient: SyRtcSignalingClient?
-    private var signalingUrl: String = "wss://syrtcapi.shengyuchenyao.cn/ws/signaling"
+    private var signalingUrl: String = "ws://47.105.48.196/ws/signaling"
     private var apiBaseUrl: String?
     private var currentChannelId: String?
     private var currentUid: String?
@@ -560,6 +560,11 @@ internal class SyRtcEngineImpl {
     func adjustPlaybackSignalVolume(_ volume: Int) {
         playbackVolume = min(max(volume, 0), 100)
         print("播放音量调整为: \(volume)")
+    }
+
+    func adjustRecordingSignalVolume(_ volume: Int) {
+        let v = min(max(volume, 0), 255)
+        print("adjustRecordingSignalVolume=\(v) (limited support)")
     }
     
     // MARK: - Token刷新

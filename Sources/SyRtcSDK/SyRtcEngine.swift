@@ -164,7 +164,7 @@ public class SyRtcEngine {
     // MARK: - 音频采集控制
 
     public func adjustRecordingSignalVolume(_ volume: Int) {
-        impl?.adjustPlaybackSignalVolume(volume)
+        impl?.adjustRecordingSignalVolume(volume)
     }
 
     public func muteRecordingSignal(_ muted: Bool) {
