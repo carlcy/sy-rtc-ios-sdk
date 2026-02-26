@@ -75,6 +75,15 @@ internal final class SyRtcSignalingClient {
         send(["type": "join", "channelId": channelId, "uid": uid])
     }
     
+    func sendChannelMessage(_ message: String) {
+        send([
+            "type": "channel-message",
+            "channelId": channelId,
+            "uid": uid,
+            "data": ["uid": uid, "message": message]
+        ])
+    }
+
     func sendLeave() {
         send(["type": "leave", "channelId": channelId, "uid": uid])
     }

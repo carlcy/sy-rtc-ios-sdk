@@ -252,6 +252,7 @@ internal class SyRtcEngineImpl {
             // 服务端 data.users 可能是 [String] 或 JSON 反序列化后的 [Any]，需兼容
             let users: [String] = (data["users"] as? [String]) ?? (data["users"] as? [Any])?.compactMap { $0 as? String } ?? []
             for u in users where u != localUid {
+                eventHandler?.onUserJoined(uid: u, elapsed: 0)
                 if peerConnections[u] == nil { _ = createPeerConnection(remoteUid: u) }
                 if shouldInitiateOffer(localUid: localUid, remoteUid: u) {
                     startOffer(to: u)
@@ -312,6 +313,10 @@ internal class SyRtcEngineImpl {
                 pendingLocalIceByUid.removeValue(forKey: uid)
                 pendingRemoteIceByUid.removeValue(forKey: uid)
             }
+        case "channel-message":
+            let fromUid = (data["uid"] as? String) ?? ""
+            let msg = (data["message"] as? String) ?? ""
+            eventHandler?.onChannelMessage(uid: fromUid, message: msg)
         case "error":
             let msg = (data["error"] as? String) ?? "信令错误"
             eventHandler?.onError(code: 1002, message: msg)
@@ -409,16 +414,26 @@ internal class SyRtcEngineImpl {
         initializeVideoSystem()
     }
     
+    private var audioEngineReady = false
+    
     private func initializeAudioSystem() {
         do {
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
             try audioSession.setActive(true)
             
-            audioEngine = AVAudioEngine()
-            print("音频系统初始化成功")
+            let engine = AVAudioEngine()
+            let _ = engine.outputNode
+            let hasInput = audioSession.availableInputs?.isEmpty == false
+            if hasInput {
+                let _ = engine.inputNode
+            }
+            audioEngine = engine
+            audioEngineReady = true
+            print("音频系统初始化成功 (hasInput=\(hasInput))")
         } catch {
             print("音频系统初始化失败: \(error)")
+            audioEngineReady = false
         }
     }
     
@@ -472,18 +487,56 @@ internal class SyRtcEngineImpl {
     func enableLocalAudio(_ enabled: Bool) {
         localAudioTrack?.isEnabled = enabled
         if enabled {
-            do {
-                try audioEngine?.start()
-                print("启用本地音频采集")
-            } catch {
-                print("启用本地音频采集失败: \(error)")
+            guard audioEngineReady, let engine = audioEngine else {
+                print("音频引擎未就绪，跳过启动")
+                return
             }
+            if engine.isRunning {
+                print("音频引擎已在运行")
+                return
+            }
+            let session = AVAudioSession.sharedInstance()
+            if session.recordPermission != .granted {
+                print("麦克风权限未授权，延迟启动音频引擎")
+                session.requestRecordPermission { [weak self] granted in
+                    DispatchQueue.main.async {
+                        if granted {
+                            self?.safeStartAudioEngine()
+                        } else {
+                            print("用户拒绝麦克风权限")
+                        }
+                    }
+                }
+                return
+            }
+            safeStartAudioEngine()
         } else {
             audioEngine?.stop()
             print("禁用本地音频采集")
         }
     }
     
+    private func safeStartAudioEngine() {
+        guard let engine = audioEngine else { return }
+        do {
+            if !engine.isRunning {
+                engine.prepare()
+                try engine.start()
+            }
+            print("启用本地音频采集")
+        } catch {
+            print("启用本地音频采集失败: \(error)")
+        }
+    }
+    
+    func sendChannelMessage(_ message: String) {
+        guard currentChannelId != nil else {
+            print("未加入频道，无法发送频道消息")
+            return
+        }
+        signalingClient?.sendChannelMessage(message)
+    }
+
     func muteLocalAudio(_ muted: Bool) {
         localAudioTrack?.isEnabled = !muted
         print("本地音频静音: \(muted)")
@@ -800,31 +853,31 @@ internal class SyRtcEngineImpl {
     
     private func reinitializeAudioSystem(sampleRate: Int) {
         do {
-            // 停止当前音频引擎
             audioEngine?.stop()
             
-            // 配置音频会话
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
-            
-            // 设置采样率
             try audioSession.setPreferredSampleRate(Double(sampleRate))
             try audioSession.setActive(true)
             
-            // 重新创建音频引擎
-            audioEngine = AVAudioEngine()
+            let engine = AVAudioEngine()
+            let hasInput = audioSession.availableInputs?.isEmpty == false
             
-            // 配置输入节点
-            let inputNode = audioEngine!.inputNode
-            let inputFormat = inputNode.inputFormat(forBus: 0)
+            if hasInput {
+                let inputNode = engine.inputNode
+                let inputFormat = inputNode.inputFormat(forBus: 0)
+                let outputNode = engine.mainMixerNode
+                let outputFormat = outputNode.outputFormat(forBus: 0)
+                print("音频系统已重新初始化: \(sampleRate)Hz, 输入格式: \(inputFormat), 输出格式: \(outputFormat)")
+            } else {
+                print("音频系统重新初始化 (无输入设备): \(sampleRate)Hz")
+            }
             
-            // 配置输出节点
-            let outputNode = audioEngine!.mainMixerNode
-            let outputFormat = outputNode.outputFormat(forBus: 0)
-            
-            print("音频系统已重新初始化: \(sampleRate)Hz, 输入格式: \(inputFormat), 输出格式: \(outputFormat)")
+            audioEngine = engine
+            audioEngineReady = true
         } catch {
             print("重新初始化音频系统失败: \(error)")
+            audioEngineReady = false
         }
     }
     

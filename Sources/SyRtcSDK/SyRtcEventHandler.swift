@@ -45,6 +45,13 @@ public protocol SyRtcEventHandler: AnyObject {
     ///   - missed: 丢失消息数
     ///   - cached: 缓存消息数
     func onStreamMessageError(uid: String, streamId: Int, code: Int, missed: Int, cached: Int)
+
+    /// 频道消息回调
+    ///
+    /// - Parameters:
+    ///   - uid: 发送方用户ID
+    ///   - message: 消息内容（JSON字符串）
+    func onChannelMessage(uid: String, message: String)
 }
 
 /// 音量信息
@@ -63,4 +70,5 @@ public extension SyRtcEventHandler {
     func onError(code: Int, message: String) {}
     func onStreamMessage(uid: String, streamId: Int, data: Data) {}
     func onStreamMessageError(uid: String, streamId: Int, code: Int, missed: Int, cached: Int) {}
+    func onChannelMessage(uid: String, message: String) {}
 }
