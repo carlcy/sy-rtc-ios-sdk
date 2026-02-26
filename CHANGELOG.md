@@ -1,5 +1,16 @@
 # SY RTC iOS SDK 更新日志
 
+## 2.1.0
+
+### 新增 SyRoomService — 房间管理服务
+
+- `SyRoomService` 类：房间管理 + Token 获取
+  - `getRoomList()` / `createRoom()` / `closeRoom()` / `getRoomDetail()`
+  - `fetchToken()` / `getOnlineCount()`
+- `SyRoomInfo` 结构体
+
+---
+
 ## 2.0.0 (Breaking Change)
 
 ### 架构调整
