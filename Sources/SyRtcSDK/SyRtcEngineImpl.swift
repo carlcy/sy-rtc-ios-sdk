@@ -317,11 +317,61 @@ internal class SyRtcEngineImpl {
             let fromUid = (data["uid"] as? String) ?? ""
             let msg = (data["message"] as? String) ?? ""
             eventHandler?.onChannelMessage(uid: fromUid, message: msg)
+            dispatchRoomMessage(uid: fromUid, rawMessage: msg)
         case "error":
             let msg = (data["error"] as? String) ?? "信令错误"
             eventHandler?.onError(code: 1002, message: msg)
         default:
             break
+        }
+    }
+
+    private func dispatchRoomMessage(uid: String, rawMessage: String) {
+        guard let data = rawMessage.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["_sy_type"] as? String == "room-msg",
+              let action = json["action"] as? String,
+              let msgData = json["data"] as? [String: Any] else { return }
+
+        switch action {
+        case "room-info-update":
+            let roomInfo = msgData["roomInfo"] as? [String: Any] ?? [:]
+            eventHandler?.onRoomInfoUpdated(operatorUid: uid, roomInfo: roomInfo)
+        case "room-notice-update":
+            eventHandler?.onRoomNoticeUpdated(operatorUid: uid, notice: msgData["notice"] as? String ?? "")
+        case "manager-update":
+            eventHandler?.onRoomManagerUpdated(uid: msgData["uid"] as? String ?? "", isManager: msgData["isManager"] as? Bool ?? false, operatorUid: uid)
+        case "seat-take":
+            eventHandler?.onSeatUpdated(seatIndex: msgData["seatIndex"] as? Int ?? 0, uid: uid, operatorUid: uid, action: "take")
+        case "seat-leave":
+            eventHandler?.onSeatUpdated(seatIndex: -1, uid: nil, operatorUid: uid, action: "leave")
+        case "seat-kick":
+            eventHandler?.onSeatUpdated(seatIndex: -1, uid: msgData["uid"] as? String, operatorUid: uid, action: "kick")
+        case "seat-lock":
+            let locked = msgData["locked"] as? Bool ?? true
+            eventHandler?.onSeatUpdated(seatIndex: msgData["seatIndex"] as? Int ?? 0, uid: nil, operatorUid: uid, action: locked ? "lock" : "unlock")
+        case "seat-mute":
+            let muted = msgData["muted"] as? Bool ?? true
+            eventHandler?.onSeatUpdated(seatIndex: msgData["seatIndex"] as? Int ?? 0, uid: nil, operatorUid: uid, action: muted ? "mute" : "unmute")
+        case "seat-request":
+            eventHandler?.onSeatRequestReceived(uid: uid, seatIndex: msgData["seatIndex"] as? Int)
+        case "seat-request-handle":
+            eventHandler?.onSeatRequestHandled(operatorUid: uid, approved: msgData["approved"] as? Bool ?? false, seatIndex: msgData["seatIndex"] as? Int)
+        case "seat-invite":
+            eventHandler?.onSeatInvitationReceived(operatorUid: uid, seatIndex: msgData["seatIndex"] as? Int ?? 0)
+        case "seat-invite-handle":
+            eventHandler?.onSeatInvitationHandled(uid: uid, accepted: msgData["accepted"] as? Bool ?? false, seatIndex: msgData["seatIndex"] as? Int ?? 0)
+        case "user-kick":
+            eventHandler?.onUserKicked(uid: msgData["uid"] as? String ?? "", operatorUid: uid)
+        case "user-mute":
+            eventHandler?.onUserMuted(uid: msgData["uid"] as? String ?? "", isMuted: msgData["muted"] as? Bool ?? true, operatorUid: uid)
+        case "user-ban":
+            eventHandler?.onUserBanned(uid: msgData["uid"] as? String ?? "", isBanned: msgData["banned"] as? Bool ?? true, operatorUid: uid)
+        case "room-chat":
+            eventHandler?.onRoomMessage(uid: uid, messageType: msgData["messageType"] as? String ?? "text", content: msgData["content"] as? String ?? "", extra: msgData["extra"] as? [String: Any])
+        case "gift":
+            eventHandler?.onGiftReceived(fromUid: uid, toUid: msgData["toUid"] as? String ?? "", giftId: msgData["giftId"] as? String ?? "", count: msgData["count"] as? Int ?? 1, extra: msgData["extra"] as? [String: Any])
+        default: break
         }
     }
 

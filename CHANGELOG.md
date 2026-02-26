@@ -1,5 +1,23 @@
 # SY RTC iOS SDK 更新日志
 
+## 1.5.0
+
+### 新功能
+
+- **房间管理**：`updateRoomInfo`、`setRoomNotice`、`setRoomManager`
+- **麦位管理**：`takeSeat`、`leaveSeat`、`requestSeat`、`handleSeatRequest`、`inviteToSeat`、`handleSeatInvitation`、`kickFromSeat`、`lockSeat`/`unlockSeat`、`muteSeat`/`unmuteSeat`
+- **用户管理**：`kickUser`、`muteUser`、`banUser`
+- **房间聊天**：`sendRoomMessage`
+- **礼物系统**：`sendGift`
+- **14 个新回调**：房间信息/公告/管理员变更、座位操作、用户管理、聊天、礼物等
+
+### 升级说明
+
+- CocoaPods：`pod 'SyRtcSDK', '~> 1.5.0'`
+- SPM：选择 tag `v1.5.0`
+
+---
+
 ## 1.4.1
 
 ### 修复
