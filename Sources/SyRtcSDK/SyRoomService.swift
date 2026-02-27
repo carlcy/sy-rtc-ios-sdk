@@ -66,6 +66,7 @@ public final class SyRoomService {
     private let appId: String
     private var authToken: String?
     private var appSecret: String?
+    private var userId: String?
 
     private let session: URLSession
     private let decoder = JSONDecoder()
@@ -90,6 +91,12 @@ public final class SyRoomService {
     /// - Parameter secret: App secret string.
     public func setAppSecret(_ secret: String) {
         appSecret = secret
+    }
+
+    /// Sets the user ID for operations that require identity (room creation, seat management, etc.).
+    /// - Parameter uid: User identifier.
+    public func setUserId(_ uid: String) {
+        userId = uid
     }
 
     // MARK: - Private Helpers
@@ -118,6 +125,9 @@ public final class SyRoomService {
         }
         if let secret = appSecret {
             request.setValue(secret, forHTTPHeaderField: "X-App-Secret")
+        }
+        if let uid = userId {
+            request.setValue(uid, forHTTPHeaderField: "X-Uid")
         }
 
         if let body = body, let data = try? JSONSerialization.data(withJSONObject: body) {
@@ -168,12 +178,15 @@ public final class SyRoomService {
     /// Fetches the list of active rooms.
     /// - Parameter completion: Called on the main queue with the result.
     public func getRoomList(completion: @escaping (Result<[SyRoomInfo], Error>) -> Void) {
-        let req = request(path: "rooms")
+        let req = request(path: "api/room/active")
         perform(req) { (data: Data) throws -> [SyRoomInfo] in
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let list = json?["rooms"] as? [[String: Any]] ?? json?["data"] as? [[String: Any]] ?? (json as? [[String: Any]])
-            let rooms = (list ?? []).compactMap { SyRoomInfo(from: $0) }
-            return rooms
+            let code = json?["code"] as? Int ?? -1
+            if code != 0 {
+                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "获取房间列表失败")
+            }
+            let list = json?["data"] as? [[String: Any]] ?? []
+            return list.compactMap { SyRoomInfo(from: $0) }
         } completion: { completion($0) }
     }
 
@@ -182,11 +195,14 @@ public final class SyRoomService {
     ///   - channelId: Channel identifier for the room.
     ///   - completion: Called on the main queue with the result.
     public func createRoom(_ channelId: String, completion: @escaping (Result<SyRoomInfo, Error>) -> Void) {
-        let req = request(path: "rooms", method: "POST", body: ["channelId": channelId])
+        let req = request(path: "api/room/create", method: "POST", body: ["channelId": channelId])
         perform(req) { (data: Data) throws -> SyRoomInfo in
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let roomDict = json?["room"] as? [String: Any] ?? json?["data"] as? [String: Any] ?? json
-            guard let dict = roomDict as? [String: Any], let room = SyRoomInfo(from: dict) else {
+            let code = json?["code"] as? Int ?? -1
+            if code != 0 {
+                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "创建房间失败")
+            }
+            guard let dict = json?["data"] as? [String: Any], let room = SyRoomInfo(from: dict) else {
                 throw SyRoomServiceError.parseError
             }
             return room
@@ -198,7 +214,7 @@ public final class SyRoomService {
     ///   - channelId: Channel identifier of the room to close.
     ///   - completion: Called on the main queue with the result.
     public func closeRoom(_ channelId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        let req = request(path: "rooms/\(channelId)/close", method: "POST")
+        let req = request(path: "api/room/\(channelId)/close", method: "POST")
         perform(req) { (_: Data) in () } completion: { completion($0) }
     }
 
@@ -207,11 +223,14 @@ public final class SyRoomService {
     ///   - channelId: Channel identifier.
     ///   - completion: Called on the main queue with the result.
     public func getRoomDetail(_ channelId: String, completion: @escaping (Result<SyRoomInfo, Error>) -> Void) {
-        let req = request(path: "rooms/\(channelId)")
+        let req = request(path: "api/room/\(channelId)")
         perform(req) { (data: Data) throws -> SyRoomInfo in
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let roomDict = json?["room"] as? [String: Any] ?? json?["data"] as? [String: Any] ?? json
-            guard let dict = roomDict as? [String: Any], let room = SyRoomInfo(from: dict) else {
+            let code = json?["code"] as? Int ?? -1
+            if code != 0 {
+                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "获取房间详情失败")
+            }
+            guard let dict = json?["data"] as? [String: Any], let room = SyRoomInfo(from: dict) else {
                 throw SyRoomServiceError.parseError
             }
             return room
@@ -223,13 +242,14 @@ public final class SyRoomService {
     ///   - channelId: Channel identifier.
     ///   - completion: Called on the main queue with the result.
     public func getOnlineCount(_ channelId: String, completion: @escaping (Result<Int, Error>) -> Void) {
-        let req = request(path: "rooms/\(channelId)/online-count")
+        let req = request(path: "api/room/\(channelId)/online-count")
         perform(req) { (data: Data) throws -> Int in
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            if let count = json?["onlineCount"] as? Int { return count }
+            let code = json?["code"] as? Int ?? -1
+            if code != 0 { return 0 }
+            if let dataObj = json?["data"] as? [String: Any], let count = dataObj["count"] as? Int { return count }
             if let count = json?["count"] as? Int { return count }
-            if let count = json?["data"] as? Int { return count }
-            throw SyRoomServiceError.parseError
+            return 0
         } completion: { completion($0) }
     }
 
@@ -245,15 +265,18 @@ public final class SyRoomService {
         expireHours: Int = 24,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        let body: [String: Any] = [
-            "channelId": channelId,
-            "uid": uid,
-            "expireHours": expireHours
+        let queryItems = [
+            URLQueryItem(name: "channelId", value: channelId),
+            URLQueryItem(name: "uid", value: uid),
+            URLQueryItem(name: "expireHours", value: String(expireHours))
         ]
-        let req = request(path: "token", method: "POST", body: body)
+        let req = request(path: "api/rtc/token", method: "POST", queryItems: queryItems)
         perform(req) { (data: Data) throws -> String in
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            if let token = json?["token"] as? String { return token }
+            let code = json?["code"] as? Int ?? -1
+            if code != 0 {
+                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "获取 Token 失败")
+            }
             if let token = json?["data"] as? String { return token }
             throw SyRoomServiceError.parseError
         } completion: { completion($0) }

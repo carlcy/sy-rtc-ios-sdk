@@ -495,7 +495,6 @@ internal class SyRtcEngineImpl {
     // MARK: - 音频控制
 
     func setClientRole(_ role: SyRtcClientRole) {
-        // 语聊 Mesh：这里先用最小行为——观众不发音频（禁用本地音轨），主播发音频
         switch role {
         case .host:
             localAudioTrack?.isEnabled = true
@@ -504,7 +503,39 @@ internal class SyRtcEngineImpl {
         }
         print("设置客户端角色: \(role)")
     }
-    
+
+    private var channelProfile: String = "communication"
+
+    func setChannelProfile(_ profile: String) {
+        channelProfile = profile
+        print("设置频道场景: \(profile)")
+    }
+
+    private var volumeIndicationTimer: Timer?
+
+    func enableAudioVolumeIndication(interval: Int, smooth: Int, reportVad: Bool) {
+        print("音量提示: interval=\(interval), smooth=\(smooth), reportVad=\(reportVad)")
+        volumeIndicationTimer?.invalidate()
+        volumeIndicationTimer = nil
+        guard interval > 0 else { return }
+        let seconds = Double(interval) / 1000.0
+        DispatchQueue.main.async { [weak self] in
+            self?.volumeIndicationTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                let speakers = [SyVolumeInfo(uid: "local", volume: 0)]
+                self.eventHandler?.onVolumeIndication(speakers: speakers)
+            }
+        }
+    }
+
+    func getConnectionState() -> String {
+        return currentChannelId != nil ? "connected" : "disconnected"
+    }
+
+    func getNetworkType() -> String {
+        return "unknown"
+    }
+
     func enableLocalAudio(_ enabled: Bool) {
         localAudioTrack?.isEnabled = enabled
         if enabled {

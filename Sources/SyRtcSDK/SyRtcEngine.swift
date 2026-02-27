@@ -71,6 +71,35 @@ public class SyRtcEngine {
         impl?.setClientRole(role)
     }
 
+    /// 设置频道场景
+    ///
+    /// 必须在 `join` 之前调用。
+    /// - Parameter profile: 场景："communication"（通信）或 "liveBroadcasting"（直播）
+    public func setChannelProfile(_ profile: String) {
+        impl?.setChannelProfile(profile)
+    }
+
+    /// 启用用户音量提示
+    ///
+    /// 启用后，SDK 会按设定间隔触发 `onVolumeIndication` 回调。
+    /// - Parameters:
+    ///   - interval: 回调间隔（毫秒），建议 200ms。设为 0 禁用。
+    ///   - smooth: 平滑系数，建议 3
+    ///   - reportVad: 是否报告本地用户的人声检测，默认 false
+    public func enableAudioVolumeIndication(interval: Int = 200, smooth: Int = 3, reportVad: Bool = false) {
+        impl?.enableAudioVolumeIndication(interval: interval, smooth: smooth, reportVad: reportVad)
+    }
+
+    /// 获取当前连接状态
+    public func getConnectionState() -> String {
+        return impl?.getConnectionState() ?? "disconnected"
+    }
+
+    /// 获取当前网络类型
+    public func getNetworkType() -> String {
+        return impl?.getNetworkType() ?? "unknown"
+    }
+
     // MARK: - 音频路由
 
     public func setEnableSpeakerphone(_ enabled: Bool) {

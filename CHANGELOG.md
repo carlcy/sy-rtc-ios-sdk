@@ -1,5 +1,21 @@
 # SY RTC iOS SDK 更新日志
 
+## 2.1.1
+
+### 新增功能
+
+- `SyRtcEngine.setChannelProfile(profile)` — 设置频道场景（通信/直播）
+- `SyRtcEngine.enableAudioVolumeIndication(interval, smooth, reportVad)` — 启用音量提示回调
+- `SyRtcEngine.getConnectionState()` — 获取当前连接状态
+- `SyRtcEngine.getNetworkType()` — 获取当前网络类型
+- `SyRoomService.setUserId(uid)` — 设置用户 ID 用于房间创建等需要身份认证的操作
+
+### Bug 修复
+
+- 修复 `SyRoomService` 的 API 路径与后端不一致的问题（`rooms` → `api/room/active` 等）
+- 修复 `fetchToken` 的参数传递方式（改为 query params）
+- 统一所有版本号为 2.1.1
+
 ## 2.1.0
 
 ### 新增 SyRoomService — 房间管理服务
