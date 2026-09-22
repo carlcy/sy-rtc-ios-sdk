@@ -123,10 +123,10 @@ let token = try await getTokenFromServer(appId: appId, channelId: channelId, uid
 try await engine.join(channelId: channelId, uid: uid, token: token)
 ```
 
-### 5.1 设置后端 API 认证 Token（用于直播等接口）
+### 5.1 设置后端 API 认证 Token
 
 ```swift
-// 用于调用 /api/rtc/live/* 等需要登录认证的接口
+// 用于调用需要登录认证的后端业务接口（与 join 的 RTC Token 不同）
 engine.setApiAuthToken(jwt)
 ```
 

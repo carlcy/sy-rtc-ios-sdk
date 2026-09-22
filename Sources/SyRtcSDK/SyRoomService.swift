@@ -258,18 +258,33 @@ public final class SyRoomService {
     ///   - channelId: Channel identifier.
     ///   - uid: User identifier.
     ///   - expireHours: Token validity in hours (default: 24).
+    ///   - role: host|audience|publisher|subscriber (Token privilege).
+    ///   - qualityTier: audio|sd|hd|fhd.
+    ///   - meta: if true, may return JSON string with token + canPublish.
     ///   - completion: Called on the main queue with the result.
     public func fetchToken(
         channelId: String,
         uid: String,
         expireHours: Int = 24,
+        role: String? = nil,
+        qualityTier: String? = nil,
+        meta: Bool = false,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        let queryItems = [
+        var queryItems = [
             URLQueryItem(name: "channelId", value: channelId),
             URLQueryItem(name: "uid", value: uid),
             URLQueryItem(name: "expireHours", value: String(expireHours))
         ]
+        if let role, !role.isEmpty {
+            queryItems.append(URLQueryItem(name: "role", value: role))
+        }
+        if let qualityTier, !qualityTier.isEmpty {
+            queryItems.append(URLQueryItem(name: "qualityTier", value: qualityTier))
+        }
+        if meta {
+            queryItems.append(URLQueryItem(name: "meta", value: "true"))
+        }
         let req = request(path: "api/rtc/token", method: "POST", queryItems: queryItems)
         perform(req) { (data: Data) throws -> String in
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -278,10 +293,74 @@ public final class SyRoomService {
                 throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "获取 Token 失败")
             }
             if let token = json?["data"] as? String { return token }
+            if let obj = json?["data"] as? [String: Any] {
+                if meta,
+                   let encoded = try? JSONSerialization.data(withJSONObject: obj),
+                   let s = String(data: encoded, encoding: .utf8) {
+                    return s
+                }
+                if let token = obj["token"] as? String { return token }
+            }
             throw SyRoomServiceError.parseError
         } completion: { completion($0) }
     }
+
+    /// Alias of `fetchToken` (docs: getToken).
+    public func getToken(
+        channelId: String,
+        uid: String,
+        expireHours: Int = 24,
+        role: String? = nil,
+        qualityTier: String? = nil,
+        meta: Bool = false,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        fetchToken(
+            channelId: channelId,
+            uid: uid,
+            expireHours: expireHours,
+            role: role,
+            qualityTier: qualityTier,
+            meta: meta,
+            completion: completion
+        )
+    }
+
+    /// Poll kick/mute flags: GET /api/room/{channelId}/members/{uid}/state
+    public func getMemberState(
+        channelId: String,
+        uid: String,
+        completion: @escaping (Result<[String: Any], Error>) -> Void
+    ) {
+        let req = request(path: "api/room/\(channelId)/members/\(uid)/state")
+        perform(req) { (data: Data) throws -> [String: Any] in
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let code = json?["code"] as? Int ?? -1
+            if code != 0 {
+                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "member state failed")
+            }
+            return (json?["data"] as? [String: Any]) ?? [:]
+        } completion: { completion($0) }
+    }
+
+    /// List room member moderation states.
+    public func listMemberStates(
+        channelId: String,
+        completion: @escaping (Result<[[String: Any]], Error>) -> Void
+    ) {
+        let req = request(path: "api/room/\(channelId)/members/state")
+        perform(req) { (data: Data) throws -> [[String: Any]] in
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let code = json?["code"] as? Int ?? -1
+            if code != 0 {
+                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "member states failed")
+            }
+            let dataObj = json?["data"] as? [String: Any]
+            return (dataObj?["list"] as? [[String: Any]]) ?? []
+        } completion: { completion($0) }
+    }
 }
+
 
 // MARK: - Errors
 

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// SY RTC引擎主类
 /// 
@@ -252,6 +255,18 @@ public class SyRtcEngine {
         impl?.setupRemoteVideo(uid: uid, viewId: viewId)
     }
 
+#if canImport(UIKit)
+    /// Bind local camera preview to a UIView (device). Simulator typically has no camera.
+    public func setupLocalVideo(view: UIView) {
+        impl?.setupLocalVideo(view: view)
+    }
+
+    /// Bind a remote user's video to a UIView.
+    public func setupRemoteVideo(uid: String, view: UIView) {
+        impl?.setupRemoteVideo(uid: uid, view: view)
+    }
+#endif
+
     // MARK: - 屏幕共享
 
     public func startScreenCapture(_ config: ScreenCaptureConfiguration) {
@@ -352,19 +367,6 @@ public class SyRtcEngine {
         impl?.sendStreamMessage(streamId: streamId, data: data)
     }
 
-    // MARK: - 旁路推流
-
-    public func startRtmpStreamWithTranscoding(url: String, transcoding: LiveTranscoding) {
-        impl?.startRtmpStreamWithTranscoding(url: url, transcoding: transcoding)
-    }
-
-    public func stopRtmpStream(url: String) {
-        impl?.stopRtmpStream(url: url)
-    }
-
-    public func updateRtmpTranscoding(transcoding: LiveTranscoding) {
-        impl?.updateRtmpTranscoding(transcoding: transcoding)
-    }
 
     // MARK: - 释放
 

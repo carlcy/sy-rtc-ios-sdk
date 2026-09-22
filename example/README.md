@@ -53,3 +53,5 @@ xcodebuild -workspace SyRtcSDKExample.xcworkspace \
 ## 📝 使用示例
 
 参考 `SyRtcSDKExample/ViewController.swift`。应用提供初始化、加入/离开房间、音频控制、视频预览等按钮。
+
+完整流程、模拟器限制与真机说明见 [README_EXAMPLE.md](./README_EXAMPLE.md)。

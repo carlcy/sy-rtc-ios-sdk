@@ -62,6 +62,8 @@ public extension SyRtcEventHandler {
     func onLeaveChannel(stats: [String: Any]) {}
     func onRejoinChannelSuccess(channelId: String, uid: String, elapsed: Int) {}
     func onRtcStats(stats: [String: Any]) {}
+    func onKicked(channelId: String, reason: String) {}
+    func onServerMuteAudio(uid: String, muted: Bool) {}
     func onUserMuteAudio(uid: String, muted: Bool) {}
     func onConnectionStateChanged(state: String, reason: String) {}
     func onNetworkQuality(uid: String, txQuality: String, rxQuality: String) {}
