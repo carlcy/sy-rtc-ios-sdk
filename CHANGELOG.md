@@ -1,4 +1,17 @@
+## 3.0.1
+
+- Version align with Android/Flutter RTC SDKs.
+
 # SY RTC iOS SDK 更新日志
+
+## Unreleased
+
+### 重大变更 / Breaking
+
+- **移除 CDN 旁路推流（直播）能力**：删除 `startRtmpStreamWithTranscoding` / `stopRtmpStream` / `updateRtmpTranscoding` 及 `LiveTranscoding` / `TranscodingUser`（Flutter：`SyLiveTranscoding`）类型；不再调用 `/api/rtc/live/*`。
+- **产品功能位**：`hasLiveFeature` / feature `live` 改为 `hasRtcFeature` / feature `rtc`（音视频一体）。`hasVoiceFeature` 保留为 `hasRtcFeature` 的兼容别名。
+- 实时音视频（`enableVideo` / mute / preview / 摄像头）作为 RTC 能力保留；房间内 `setClientRole` / `setChannelProfile`（含 `liveBroadcasting` 互动角色）保留。
+- IM 将作为独立 SDK 提供，不在本 RTC SDK 内。
 
 ## 3.0.0
 

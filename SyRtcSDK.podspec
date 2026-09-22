@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'SyRtcSDK'
-  s.version          = '3.0.0'
+  s.version          = '3.0.1'
   s.summary          = 'SY RTC iOS SDK for audio communication'
   s.description      = <<-DESC
 SY RTC iOS SDK provides real-time audio and video communication capabilities.
