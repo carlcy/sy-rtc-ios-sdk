@@ -1,4 +1,6 @@
 import Foundation
+import CoreMedia
+import CoreVideo
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -66,6 +68,10 @@ public class SyRtcEngine {
         impl?.muteLocalAudio(muted)
     }
 
+    public func isLocalAudioMuted() -> Bool {
+        impl?.isLocalAudioMuted() ?? false
+    }
+
     public func sendChannelMessage(_ message: String) {
         impl?.sendChannelMessage(message)
     }
@@ -115,6 +121,15 @@ public class SyRtcEngine {
 
     public func isSpeakerphoneEnabled() -> Bool {
         return impl?.isSpeakerphoneEnabled() ?? false
+    }
+
+    /// 只支持 `.speaker` 与 `.earpiece`。蓝牙和有线耳机由系统路由决定。
+    public func setAudioRoute(_ route: SyRtcAudioRoute) {
+        impl?.setAudioRoute(route)
+    }
+
+    public func getAudioRoute() -> SyRtcAudioRoute {
+        impl?.getAudioRoute() ?? .unknown
     }
 
     // MARK: - 远端音频控制
@@ -258,6 +273,43 @@ public class SyRtcEngine {
         impl?.muteLocalVideoStream(muted)
     }
 
+    public func isLocalVideoMuted() -> Bool {
+        impl?.isLocalVideoMuted() ?? false
+    }
+
+    /// 在前后摄像头之间切换。自定义采集开启时无效。
+    public func switchCamera() {
+        impl?.switchCamera()
+    }
+
+    public func useFrontCamera(_ front: Bool) {
+        impl?.useFrontCamera(front)
+    }
+
+    /// 本地视频帧钩子。返回的缓冲会送进 WebRTC 编码器。不是云端美颜。
+    public func setVideoFrameProcessor(_ processor: SyRtcVideoFrameProcessor?) {
+        impl?.setVideoFrameProcessor(processor)
+    }
+
+    /// 停止摄像头，改由 `sendCustomVideoFrame` 推帧。
+    public func enableCustomVideoCapture(_ enabled: Bool) {
+        impl?.enableCustomVideoCapture(enabled)
+    }
+
+    public func sendCustomVideoFrame(pixelBuffer: CVPixelBuffer, rotation: Int = 0, timestampNs: Int64 = 0) {
+        impl?.sendCustomVideoFrame(pixelBuffer: pixelBuffer, rotation: rotation, timestampNs: timestampNs)
+    }
+
+    /// 通过信令广播一段附加信息（最长 1024 字节），不是视频 SEI。
+    /// 前缀 `sy-extra:` 被保留，收到后走 `onStreamExtraInfoUpdated`，不会再进 `onChannelMessage`。
+    public func setStreamExtraInfo(_ extraInfo: String) {
+        impl?.setStreamExtraInfo(extraInfo)
+    }
+
+    public func getStreamExtraInfo() -> String {
+        impl?.getStreamExtraInfo() ?? ""
+    }
+
     public func muteRemoteVideoStream(uid: String, muted: Bool) {
         impl?.muteRemoteVideoStream(uid: uid, muted: muted)
     }
@@ -296,6 +348,11 @@ public class SyRtcEngine {
 
     public func stopScreenCapture() {
         impl?.stopScreenCapture()
+    }
+
+    /// 把进程内的屏幕帧送进 WebRTC。Broadcast Extension 里调用无效。
+    public func pushScreenSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        impl?.pushScreenSampleBuffer(sampleBuffer)
     }
 
     public func updateScreenCaptureConfiguration(_ config: ScreenCaptureConfiguration) {

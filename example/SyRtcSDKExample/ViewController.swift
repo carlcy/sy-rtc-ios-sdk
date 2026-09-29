@@ -442,7 +442,8 @@ extension ViewController: SyRtcEventHandler {
     }
 
     func onNetworkQuality(uid: String, txQuality: String, rxQuality: String) {
-        let poor = txQuality.lowercased().contains("poor") || rxQuality.lowercased().contains("poor")
+        let text = (txQuality + " " + rxQuality).lowercased()
+        let poor = text.contains("poor") || text.contains("bad") || text.contains("down")
         guard poor else { return }
         DispatchQueue.main.async {
             self.appendLog("网络较差 uid=\(uid) tx=\(txQuality) rx=\(rxQuality)")

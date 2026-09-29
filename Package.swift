@@ -23,6 +23,7 @@ let package = Package(
             path: "Sources/SyRtcSDK",
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
+                .linkedFramework("Network"),
                 .linkedFramework("CoreImage"),
                 .linkedFramework("CoreMedia"),
                 .linkedFramework("CoreVideo"),

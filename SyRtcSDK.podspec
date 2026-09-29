@@ -15,7 +15,7 @@ The pod ships Swift sources and depends on WebRTC-SDK; customers do not download
   s.ios.deployment_target = '13.0'
   s.swift_version = '5.9'
   s.source_files = 'Sources/SyRtcSDK/**/*.swift'
-  s.frameworks = 'Foundation', 'AVFoundation', 'UIKit', 'CoreImage', 'ReplayKit', 'CoreMedia', 'CoreVideo'
+  s.frameworks = 'Foundation', 'AVFoundation', 'UIKit', 'CoreImage', 'ReplayKit', 'CoreMedia', 'CoreVideo', 'Network'
   # 与 Android webrtc-sdk 125.6422.07、Package.swift binaryTarget 同一主版本。
   s.dependency 'WebRTC-SDK', '~> 125.6422.07'
 end

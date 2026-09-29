@@ -1,11 +1,14 @@
 import Foundation
 import AVFoundation
+import Network
 import WebRTC
 #if canImport(UIKit)
 import UIKit
 #endif
 import ReplayKit
 import CoreImage
+import CoreMedia
+import CoreVideo
 
 /// RTC引擎实现类
 /// 
@@ -77,6 +80,41 @@ internal class SyRtcEngineImpl {
     private var tokenWarnWork: DispatchWorkItem?
     private var tokenExpireWork: DispatchWorkItem?
     private var currentQualityTier: String = SyRtcQualityTier.sd.rawValue
+    private var connectionState = "disconnected"
+    private var networkType = "unknown"
+    private var pathMonitor: NWPathMonitor?
+    private var routeObserver: NSObjectProtocol?
+    private var monitorsStarted = false
+    private var preferFrontCamera = true
+    private var customVideoCaptureEnabled = false
+    private var videoFrameProcessor: SyRtcVideoFrameProcessor?
+    private var cameraVideoSource: RTCVideoSource?
+    private var cameraFrameRelay: CameraFrameRelay?
+    private var screenVideoSource: RTCVideoSource?
+    private var screenVideoTrack: RTCVideoTrack?
+    private var screenCapturer: RTCVideoCapturer?
+    private var localAudioMuted = false
+    private var localVideoMuted = false
+    private var muteAllRemoteAudio = false
+    private var muteAllRemoteVideo = false
+    private var remoteAudioMuted: [String: Bool] = [:]
+    private var remoteAudioTracks: [String: RTCAudioTrack] = [:]
+    private var streamExtraInfo = ""
+    private let streamExtraPrefix = "sy-extra:"
+    private var signalingGeneration = 0
+    private var reconnectAttempt = 0
+    private var reconnectWork: DispatchWorkItem?
+    private var qualityTimer: Timer?
+    private var volumeIntervalMs = 0
+    private var volumeSmooth = 3
+    private var reportVad = false
+    private var smoothedVolumes: [String: Double] = [:]
+    private var dataStreamConfigs: [Int: (reliable: Bool, ordered: Bool)] = [:]
+    private var nextDataStreamId = 1
+    private var dataChannelsByPeer: [String: [Int: RTCDataChannel]] = [:]
+    private var pendingForceOffer: Set<String> = []
+    private var firstFrameRenderers: [String: FirstFrameRenderer] = [:]
+    private var canPublishMedia = true
     
     // 多人语聊（Mesh）：每个远端用户一条 PeerConnection（key=remoteUid）
     private var offerSentByUid: Set<String> = []
@@ -127,6 +165,7 @@ internal class SyRtcEngineImpl {
         self.appId = appId
         initializeAudioSystem()
         initializeWebRTC()
+        startMonitorsIfNeeded()
     }
 
     func setSignalingServerUrl(_ url: String) {
@@ -165,13 +204,11 @@ internal class SyRtcEngineImpl {
         hasFiredJoinSuccess = false
         joinStartTime = Date()
 
+        connectionState = "connecting"
         eventHandler?.onConnectionStateChanged(state: "connecting", reason: "joining")
-
-        // 连接信令
-        signalingClient = SyRtcSignalingClient(signalingUrl: signalingUrl, channelId: channelId, uid: uid, token: token) { [weak self] type, data in
-            self?.handleSignalingMessage(type: type, data: data, channelId: channelId)
-        }
-        signalingClient?.connect()
+        reconnectAttempt = 0
+        openSignaling(channelId: channelId, uid: uid, token: token)
+        startQualityMonitor()
 
         // 本地音频轨道（多人：后续每条 PC 都 addTrack）
         if let factory = peerConnectionFactory, localAudioTrack == nil {
@@ -181,7 +218,13 @@ internal class SyRtcEngineImpl {
     }
 
     func leave() {
+        connectionState = "disconnecting"
         eventHandler?.onConnectionStateChanged(state: "disconnecting", reason: "leaving")
+        signalingGeneration += 1
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        reconnectAttempt = 0
+        stopQualityMonitor()
 
         peerConnections.values.forEach { $0.close() }
         peerConnections.removeAll()
@@ -189,6 +232,11 @@ internal class SyRtcEngineImpl {
         remoteSdpSetByUid.removeAll()
         pendingLocalIceByUid.removeAll()
         pendingRemoteIceByUid.removeAll()
+        pendingForceOffer.removeAll()
+        dataChannelsByPeer.removeAll()
+        remoteAudioTracks.removeAll()
+        remoteVideoTracks.removeAll()
+        firstFrameRenderers.removeAll()
         signalingClient?.disconnect(sendLeave: true)
         signalingClient = nil
         pendingRejoin = false
@@ -200,6 +248,7 @@ internal class SyRtcEngineImpl {
         currentToken = nil
         joinStartTime = nil
         hasFiredJoinSuccess = false
+        connectionState = "disconnected"
 
         eventHandler?.onLeaveChannel(stats: ["channelId": channelId])
         eventHandler?.onConnectionStateChanged(state: "disconnected", reason: "leave")
@@ -216,8 +265,13 @@ internal class SyRtcEngineImpl {
         peerConnections[remoteUid] = pc
         pendingLocalIceByUid[remoteUid] = []
         pendingRemoteIceByUid[remoteUid] = []
-        // add tracks
-        if let track = localAudioTrack { pc?.add(track, streamIds: ["stream"]) }
+        if let pc {
+            if let track = localAudioTrack { addTrackIfNeeded(track, to: pc) }
+            if let track = localVideoTrack { addTrackIfNeeded(track, to: pc) }
+            if let track = screenVideoTrack { addTrackIfNeeded(track, to: pc) }
+            attachExistingDataChannels(remoteUid: remoteUid, peerConnection: pc)
+            applyVideoBitrateToSenders()
+        }
         return pc
     }
 
@@ -247,6 +301,8 @@ internal class SyRtcEngineImpl {
             // 服务端 data.users 可能是 [String] 或 JSON 反序列化后的 [Any]，需兼容
             let users: [String] = (data["users"] as? [String]) ?? (data["users"] as? [Any])?.compactMap { $0 as? String } ?? []
             let rejoining = pendingRejoin
+            reconnectAttempt = 0
+            connectionState = "connected"
             if !hasFiredJoinSuccess {
                 hasFiredJoinSuccess = true
                 let elapsed = Int((Date().timeIntervalSince(joinStartTime ?? Date())) * 1000)
@@ -256,6 +312,7 @@ internal class SyRtcEngineImpl {
                 pendingRejoin = false
                 let elapsed = Int((Date().timeIntervalSince(joinStartTime ?? Date())) * 1000)
                 eventHandler?.onRejoinChannelSuccess(channelId: chId, uid: localUid, elapsed: max(0, elapsed))
+                eventHandler?.onConnectionStateChanged(state: "connected", reason: "rejoin_success")
             }
             for u in users where u != localUid {
                 let known = peerConnections[u] != nil
@@ -263,6 +320,9 @@ internal class SyRtcEngineImpl {
                     eventHandler?.onUserJoined(uid: u, elapsed: 0)
                 }
                 if peerConnections[u] == nil { _ = createPeerConnection(remoteUid: u) }
+                if !known {
+                    republishSideInfo()
+                }
                 if shouldInitiateOffer(localUid: localUid, remoteUid: u) {
                     startOffer(to: u)
                 }
@@ -276,12 +336,15 @@ internal class SyRtcEngineImpl {
                 guard let self = self else { return }
                 self.remoteSdpSetByUid.insert(from)
                 self.flushPendingRemoteIce(from: from)
-                let constraints = RTCMediaConstraints(mandatoryConstraints: ["OfferToReceiveAudio": "true"], optionalConstraints: nil)
+                let constraints = self.receiveConstraints()
                 pcUnwrapped.answer(for: constraints) { sdp, _ in
                     guard let sdp = sdp else { return }
                     pcUnwrapped.setLocalDescription(sdp) { _ in
                         self.signalingClient?.sendAnswer(sdp: sdp.sdp, toUid: from)
                         self.flushPendingLocalIce(to: from)
+                        if !self.dataStreamConfigs.isEmpty || self.localVideoTrack != nil || self.screenVideoTrack != nil {
+                            self.forceOffer(to: from)
+                        }
                     }
                 }
             }
@@ -307,7 +370,9 @@ internal class SyRtcEngineImpl {
             if let uid = data["uid"] as? String {
                 eventHandler?.onUserJoined(uid: uid, elapsed: 0)
                 if let localUid = currentUid, uid != localUid {
+                    let known = peerConnections[uid] != nil
                     if peerConnections[uid] == nil { _ = createPeerConnection(remoteUid: uid) }
+                    if !known { republishSideInfo() }
                     if shouldInitiateOffer(localUid: localUid, remoteUid: uid) {
                         startOffer(to: uid)
                     }
@@ -321,11 +386,23 @@ internal class SyRtcEngineImpl {
                 remoteSdpSetByUid.remove(uid)
                 pendingLocalIceByUid.removeValue(forKey: uid)
                 pendingRemoteIceByUid.removeValue(forKey: uid)
+                pendingForceOffer.remove(uid)
+                dataChannelsByPeer.removeValue(forKey: uid)
+                remoteAudioTracks.removeValue(forKey: uid)
+                remoteVideoTracks.removeValue(forKey: uid)
+                firstFrameRenderers.removeValue(forKey: uid)
             }
         case "channel-message":
             let fromUid = (data["uid"] as? String) ?? ""
             let msg = (data["message"] as? String) ?? ""
-            eventHandler?.onChannelMessage(uid: fromUid, message: msg)
+            if msg.hasPrefix(streamExtraPrefix) {
+                let extra = String(msg.dropFirst(streamExtraPrefix.count))
+                eventHandler?.onStreamExtraInfoUpdated(uid: fromUid, extraInfo: extra)
+            } else {
+                eventHandler?.onChannelMessage(uid: fromUid, message: msg)
+            }
+        case "user-media":
+            applyRemoteMediaState(data)
         case "token-will-expire", "token-privilege-will-expire":
             eventHandler?.onTokenPrivilegeWillExpire()
         case "token-expired", "request-token":
@@ -342,14 +419,11 @@ internal class SyRtcEngineImpl {
         return localUid < remoteUid
     }
 
-    private func startOffer(to remoteUid: String) {
+    private func startOffer(to remoteUid: String, force: Bool = false) {
         guard let pc = peerConnections[remoteUid] else { return }
-        if offerSentByUid.contains(remoteUid) { return }
+        if !force && offerSentByUid.contains(remoteUid) { return }
         offerSentByUid.insert(remoteUid)
-        let constraints = RTCMediaConstraints(
-            mandatoryConstraints: ["OfferToReceiveAudio": "true", "OfferToReceiveVideo": "false"],
-            optionalConstraints: nil
-        )
+        let constraints = receiveConstraints()
         pc.offer(for: constraints) { [weak self] sdp, _ in
             guard let self = self, let sdp = sdp else { return }
             pc.setLocalDescription(sdp) { _ in
@@ -378,14 +452,44 @@ internal class SyRtcEngineImpl {
         }
 
         // MARK: - RTCPeerConnectionDelegate required stubs (GoogleWebRTC)
-        func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-        func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+        func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
+            if stateChanged == .stable {
+                owner?.flushRenegotiation(remoteUid: remoteUid)
+            }
+        }
+        func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+            stream.videoTracks.forEach { owner?.attachRemoteTrack($0, uid: remoteUid) }
+            stream.audioTracks.forEach { owner?.attachRemoteTrack($0, uid: remoteUid) }
+        }
         func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
         func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-        func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
+        func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+            owner?.handleIceState(newState, remoteUid: remoteUid)
+        }
         func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
         func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-        func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+        func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+            owner?.handleOpenedDataChannel(dataChannel, remoteUid: remoteUid)
+        }
+        func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
+            if let track = rtpReceiver.track {
+                owner?.attachRemoteTrack(track, uid: remoteUid)
+            }
+        }
+
+        func peerConnection(_ peerConnection: RTCPeerConnection, didAddReceiver rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
+            if let track = rtpReceiver.track {
+                owner?.attachRemoteTrack(track, uid: remoteUid)
+            }
+        }
+
+        func peerConnection(_ peerConnection: RTCPeerConnection, didChangeConnectionState newState: RTCPeerConnectionState) {
+            owner?.handlePeerConnectionState(newState, remoteUid: remoteUid)
+        }
+
+        func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
+            owner?.handlePeerConnectionState(newState, remoteUid: remoteUid)
+        }
     }
 
     private func flushPendingLocalIce(to remoteUid: String) {
@@ -462,10 +566,27 @@ internal class SyRtcEngineImpl {
         do {
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.overrideOutputAudioPort(enabled ? .speaker : .none)
-            print("扬声器状态: \(enabled)")
+            publishCurrentAudioRoute()
         } catch {
             print("设置扬声器失败: \(error)")
+            eventHandler?.onError(code: 1004, message: "设置扬声器失败")
         }
+    }
+
+    func setAudioRoute(_ route: SyRtcAudioRoute) {
+        switch route {
+        case .speaker:
+            setEnableSpeakerphone(true)
+        case .earpiece:
+            setEnableSpeakerphone(false)
+        case .headset, .bluetooth, .unknown:
+            eventHandler?.onError(code: 1004, message: "iOS 只能在扬声器和听筒之间切换，蓝牙和有线耳机由系统路由决定")
+            publishCurrentAudioRoute()
+        }
+    }
+
+    func getAudioRoute() -> SyRtcAudioRoute {
+        currentAudioRoute()
     }
     
     func setDefaultAudioRouteToSpeakerphone(_ enabled: Bool) {
@@ -474,7 +595,7 @@ internal class SyRtcEngineImpl {
             try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: enabled ? [.defaultToSpeaker] : [])
             try audioSession.setActive(true)
             speakerphoneEnabled = enabled
-            print("默认音频路由设置为扬声器: \(enabled)")
+            publishCurrentAudioRoute()
         } catch {
             print("设置默认音频路由失败: \(error)")
         }
@@ -487,9 +608,16 @@ internal class SyRtcEngineImpl {
     // MARK: - 音频控制
 
     func setClientRole(_ role: SyRtcClientRole) {
-        let publish = role.canPublish
-        localAudioTrack?.isEnabled = publish
-        localVideoTrack?.isEnabled = publish
+        canPublishMedia = role.canPublish
+        localAudioTrack?.isEnabled = canPublishMedia && !localAudioMuted
+        localVideoTrack?.isEnabled = canPublishMedia && !localVideoMuted
+        screenVideoTrack?.isEnabled = canPublishMedia
+        if currentChannelId != nil {
+            signalingClient?.sendUserMedia(
+                audioMuted: !canPublishMedia || localAudioMuted,
+                videoMuted: !canPublishMedia || localVideoMuted
+            )
+        }
     }
 
     private var channelProfile: String = "communication"
@@ -502,26 +630,27 @@ internal class SyRtcEngineImpl {
     private var volumeIndicationTimer: Timer?
 
     func enableAudioVolumeIndication(interval: Int, smooth: Int, reportVad: Bool) {
-        print("音量提示: interval=\(interval), smooth=\(smooth), reportVad=\(reportVad)")
+        volumeIntervalMs = max(0, interval)
+        volumeSmooth = max(1, smooth)
+        self.reportVad = reportVad
         volumeIndicationTimer?.invalidate()
         volumeIndicationTimer = nil
         guard interval > 0 else { return }
         let seconds = Double(interval) / 1000.0
         DispatchQueue.main.async { [weak self] in
-            self?.volumeIndicationTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                let speakers = [SyVolumeInfo(uid: "local", volume: 0)]
-                self.eventHandler?.onVolumeIndication(speakers: speakers)
+            guard let self = self else { return }
+            self.volumeIndicationTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: true) { [weak self] _ in
+                self?.collectStatistics(reportVolume: true, reportQuality: false)
             }
         }
     }
 
     func getConnectionState() -> String {
-        return currentChannelId != nil ? "connected" : "disconnected"
+        connectionState
     }
 
     func getNetworkType() -> String {
-        return "unknown"
+        networkType
     }
 
     func enableLocalAudio(_ enabled: Bool) {
@@ -578,18 +707,28 @@ internal class SyRtcEngineImpl {
     }
 
     func muteLocalAudio(_ muted: Bool) {
-        localAudioTrack?.isEnabled = !muted
-        print("本地音频静音: \(muted)")
+        localAudioMuted = muted
+        localAudioTrack?.isEnabled = !muted && canPublishMedia
+        eventHandler?.onLocalAudioStateChanged(state: muted ? "stopped" : "recording", error: "ok")
+        signalingClient?.sendUserMedia(audioMuted: muted, videoMuted: nil)
+    }
+
+    func isLocalAudioMuted() -> Bool {
+        localAudioMuted
     }
     
     func muteRemoteAudioStream(uid: String, muted: Bool) {
+        remoteAudioMuted[uid] = muted
         userVolumes[uid] = muted ? 0 : 100
-        print("远端用户 \(uid) 音频静音: \(muted)")
+        remoteAudioTracks[uid]?.isEnabled = !muted && !muteAllRemoteAudio
     }
     
     func muteAllRemoteAudioStreams(_ muted: Bool) {
+        muteAllRemoteAudio = muted
         playbackVolume = muted ? 0 : 100
-        print("所有远端音频静音: \(muted)")
+        for (uid, track) in remoteAudioTracks {
+            track.isEnabled = !muted && remoteAudioMuted[uid] != true
+        }
     }
     
     func adjustUserPlaybackSignalVolume(uid: String, volume: Int) {
@@ -622,12 +761,8 @@ internal class SyRtcEngineImpl {
         }
         // 信令 URL 上的 token 才是服务端校验依据。重连 WebSocket，不拆掉已有 PeerConnection。
         let wasInChannel = signalingClient != nil && hasFiredJoinSuccess
-        signalingClient?.disconnect(sendLeave: false)
-        signalingClient = SyRtcSignalingClient(signalingUrl: signalingUrl, channelId: channelId, uid: uid, token: trimmed) { [weak self] type, data in
-            self?.handleSignalingMessage(type: type, data: data, channelId: channelId)
-        }
         pendingRejoin = wasInChannel
-        signalingClient?.connect()
+        openSignaling(channelId: channelId, uid: uid, token: trimmed)
     }
 
     func getQualityTier() -> String {
@@ -875,18 +1010,10 @@ internal class SyRtcEngineImpl {
         
         print("应用视频编码配置: \(width)x\(height), \(frameRate)fps, \(bitrate)kbps")
         
-        // 如果已启用视频，更新编码器配置
-        if isVideoEnabled, let videoSource = peerConnectionFactory?.videoSource() {
-            // 使用WebRTC设置视频编码参数
-            // WebRTC会根据视频源的分辨率自动调整编码参数
-            print("视频编码器配置已更新: \(width)x\(height), \(frameRate)fps, \(bitrate)kbps")
-            
-            // 如果视频轨道已创建，更新编码参数
-            if let videoTrack = localVideoTrack {
-                // WebRTC会根据视频源的分辨率自动调整编码参数
-                // 可以通过RTCVideoEncoderFactory配置更详细的参数
-            }
-        }
+        cameraVideoSource?.adaptOutputFormat(toWidth: Int32(width), height: Int32(height), fps: Int32(frameRate))
+        screenVideoSource?.adaptOutputFormat(toWidth: Int32(width), height: Int32(height), fps: Int32(frameRate))
+        applyVideoBitrateToSenders()
+        print("视频编码器配置已更新: \(width)x\(height), \(frameRate)fps, \(bitrate)kbps")
     }
     
     private func calculateBitrate(width: Int, height: Int, frameRate: Int) -> Int {
@@ -986,98 +1113,136 @@ internal class SyRtcEngineImpl {
     }
     
     func startPreview() {
+        if customVideoCaptureEnabled {
+            eventHandler?.onError(code: 1007, message: "自定义采集已开启，请用 sendCustomVideoFrame 推帧")
+            return
+        }
         if !isVideoEnabled {
-            print("视频模块未启用，无法开始预览")
+            enableVideo()
+        }
+        if isPreviewing, videoCapturer is RTCCameraVideoCapturer {
             return
         }
-        
-        if isPreviewing {
-            print("视频预览已在进行中")
+        guard let track = ensureCameraVideoTrack() else {
+            eventHandler?.onError(code: -1001, message: "视频源未就绪")
             return
         }
-        
         isPreviewing = true
-        print("开始视频预览")
-        
-        // 应用当前视频编码配置
         if let config = currentVideoConfig {
             applyVideoEncoderConfiguration(config)
         }
-        
-        // 使用WebRTC启动摄像头预览
-        guard let factory = peerConnectionFactory else {
-            print("PeerConnectionFactory未初始化，无法开始预览")
-            return
-        }
-        let videoSource = factory.videoSource()
-        let videoTrack = factory.videoTrack(with: videoSource, trackId: "video_track")
-        
-        // 使用AVFoundation创建视频采集器
-        let capturer = RTCCameraVideoCapturer(delegate: videoSource)
+        let relay = ensureCameraFrameRelay()
+        let capturer = RTCCameraVideoCapturer(delegate: relay)
         videoCapturer = capturer
-        
-        // 启动摄像头（模拟器通常没有摄像头）
-        let fps = currentVideoConfig?.frameRate ?? 15
-        if let frontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
-            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
-            capturer.startCapture(with: frontCamera, format: frontCamera.activeFormat, fps: fps)
-            print("摄像头预览已启动")
-        } else {
-            print("无可用摄像头（模拟器常见）。本地预览视图将保持占位。")
-            eventHandler?.onError(code: -1001, message: "No camera available (simulator or permission). Audio still works.")
+        let started = startCamera(capturer, front: preferFrontCamera)
+        if started {
+            eventHandler?.onLocalVideoStateChanged(state: "capturing", error: "ok")
         }
-
-        localVideoTrack = videoTrack
-#if canImport(UIKit)
-        if let renderer = localRenderer {
-            videoTrack.add(renderer)
-        }
-#endif
+        attachPublishedVideo(track)
     }
     
     func stopPreview() {
-        if !isPreviewing {
-            print("视频预览未在进行中")
+        if !isPreviewing && !customVideoCaptureEnabled {
             return
         }
-        
         isPreviewing = false
-        print("停止视频预览")
-        
-        // 停止摄像头
+        customVideoCaptureEnabled = false
         if let capturer = videoCapturer as? RTCCameraVideoCapturer {
             capturer.stopCapture()
         }
         videoCapturer = nil
+        if let track = localVideoTrack {
+            removePublishedTrack(track)
+        }
         localVideoTrack?.isEnabled = false
         localVideoTrack = nil
+        cameraVideoSource = nil
+        eventHandler?.onLocalVideoStateChanged(state: "stopped", error: "ok")
+    }
+
+    func switchCamera() {
+        useFrontCamera(!preferFrontCamera)
+    }
+
+    func useFrontCamera(_ front: Bool) {
+        preferFrontCamera = front
+        guard !customVideoCaptureEnabled, let capturer = videoCapturer as? RTCCameraVideoCapturer else { return }
+        _ = startCamera(capturer, front: front)
+    }
+
+    func setVideoFrameProcessor(_ processor: SyRtcVideoFrameProcessor?) {
+        videoFrameProcessor = processor
+    }
+
+    func enableCustomVideoCapture(_ enabled: Bool) {
+        if enabled {
+            if let capturer = videoCapturer as? RTCCameraVideoCapturer {
+                capturer.stopCapture()
+            }
+            customVideoCaptureEnabled = true
+            isVideoEnabled = true
+            isPreviewing = true
+            guard let source = ensureCameraVideoSource(), let track = ensureCameraVideoTrack() else {
+                eventHandler?.onError(code: -1001, message: "自定义采集视频源未就绪")
+                return
+            }
+            videoCapturer = RTCVideoCapturer(delegate: source)
+            attachPublishedVideo(track)
+            eventHandler?.onLocalVideoStateChanged(state: "capturing", error: "custom")
+        } else if customVideoCaptureEnabled {
+            stopPreview()
+        }
+    }
+
+    func sendCustomVideoFrame(pixelBuffer: CVPixelBuffer, rotation: Int, timestampNs: Int64) {
+        guard customVideoCaptureEnabled, let source = cameraVideoSource, let capturer = videoCapturer else {
+            eventHandler?.onError(code: 1007, message: "请先 enableCustomVideoCapture(true)")
+            return
+        }
+        let processed = videoFrameProcessor?(pixelBuffer, rotation) ?? pixelBuffer
+        let buffer = RTCCVPixelBuffer(pixelBuffer: processed)
+        let ts = timestampNs > 0 ? timestampNs : Int64(Date().timeIntervalSince1970 * 1_000_000_000)
+        let frame = RTCVideoFrame(buffer: buffer, rotation: Self.rtcRotation(rotation), timeStampNs: ts)
+        source.capturer(capturer, didCapture: frame)
+    }
+
+    func setStreamExtraInfo(_ info: String) {
+        if info.utf8.count > 1024 {
+            eventHandler?.onError(code: 1006, message: "流附加信息超过 1024 字节")
+            return
+        }
+        streamExtraInfo = info
+        guard currentChannelId != nil else { return }
+        signalingClient?.sendChannelMessage(streamExtraPrefix + info)
+    }
+
+    func getStreamExtraInfo() -> String {
+        streamExtraInfo
+    }
+
+    func isLocalVideoMuted() -> Bool {
+        localVideoMuted
     }
     
     func muteLocalVideoStream(_ muted: Bool) {
+        localVideoMuted = muted
         videoMutedStates["local"] = muted
-        print("本地视频静音: \(muted)")
-        
-        // 实际应用静音逻辑
-        localVideoTrack?.isEnabled = !muted
+        localVideoTrack?.isEnabled = !muted && canPublishMedia
+        screenVideoTrack?.isEnabled = !muted && canPublishMedia
+        eventHandler?.onLocalVideoStateChanged(state: muted ? "stopped" : "capturing", error: "ok")
+        signalingClient?.sendUserMedia(audioMuted: nil, videoMuted: muted)
     }
     
     func muteRemoteVideoStream(uid: String, muted: Bool) {
         videoMutedStates[uid] = muted
-        print("远端用户 \(uid) 视频静音: \(muted)")
-        
-        // 实际应用静音逻辑
-        // videoRenderer.setMuted(uid, muted)
+        remoteVideoTracks[uid]?.isEnabled = !muted && !muteAllRemoteVideo
     }
     
     func muteAllRemoteVideoStreams(_ muted: Bool) {
-        // 更新所有远端用户的静音状态
-        for uid in videoMutedStates.keys where uid != "local" {
-            videoMutedStates[uid] = muted
+        muteAllRemoteVideo = muted
+        for (uid, track) in remoteVideoTracks {
+            track.isEnabled = !muted && videoMutedStates[uid] != true
         }
-        print("所有远端视频静音: \(muted)")
-        
-        // 实际应用静音逻辑
-        // videoRenderer.setAllMuted(muted)
     }
     
     func setupLocalVideo(viewId: Int) {
@@ -1134,64 +1299,75 @@ internal class SyRtcEngineImpl {
     
     func startScreenCapture(_ config: ScreenCaptureConfiguration) {
         if isScreenCapturing {
-            print("屏幕共享已在进行中")
             return
         }
-        
-        screenCaptureConfig = config
-        isScreenCapturing = true
-        print("开始屏幕共享: \(config.width)x\(config.height), \(config.frameRate)fps")
-        
-        // 使用ReplayKit进行屏幕录制
-        do {
-            let screenRecorder = RPScreenRecorder.shared()
-            self.screenRecorder = screenRecorder
-            
-            // 配置屏幕录制
-            screenRecorder.isMicrophoneEnabled = false
-            screenRecorder.isCameraEnabled = false
-            
-            // 启动屏幕录制
-            screenRecorder.startCapture { [weak self] sampleBuffer, bufferType, error in
-                guard let self = self, error == nil else { return }
-                
-                if bufferType == .video {
-                    // 将屏幕内容转换为视频轨道
-                    // 实际实现需要将CMSampleBuffer转换为RTCVideoFrame
-                    // 然后添加到视频轨道
-                }
-            } completionHandler: { error in
-                if let error = error {
-                    print("启动屏幕录制失败: \(error)")
-                } else {
-                    print("屏幕录制已启动")
-                }
-            }
-        } catch {
-            print("启动屏幕共享失败: \(error)")
-            isScreenCapturing = false
+        guard ensureScreenVideoTrack() != nil else {
+            eventHandler?.onError(code: 1008, message: "屏幕共享视频源未就绪")
+            return
         }
+        screenCaptureConfig = config
+        if config.width > 0, config.height > 0 {
+            let fps = max(1, config.frameRate)
+            screenVideoSource?.adaptOutputFormat(toWidth: Int32(config.width), height: Int32(config.height), fps: Int32(fps))
+        }
+        let screenRecorder = RPScreenRecorder.shared()
+        self.screenRecorder = screenRecorder
+        screenRecorder.isMicrophoneEnabled = false
+        screenRecorder.isCameraEnabled = false
+        screenRecorder.startCapture { [weak self] sampleBuffer, bufferType, error in
+            guard let self = self, error == nil, bufferType == .video else { return }
+            self.pushScreenSampleBuffer(sampleBuffer)
+        } completionHandler: { [weak self] error in
+            guard let self = self else { return }
+            if let error = error {
+                self.isScreenCapturing = false
+                self.screenRecorder = nil
+                self.eventHandler?.onError(code: 1008, message: "启动屏幕录制失败: \(error.localizedDescription)")
+                return
+            }
+            self.isScreenCapturing = true
+            if let track = self.screenVideoTrack {
+                self.attachPublishedVideo(track)
+            }
+            self.eventHandler?.onLocalVideoStateChanged(state: "capturing", error: "screen")
+        }
+    }
+
+    func pushScreenSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        guard let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        if screenVideoTrack == nil {
+            _ = ensureScreenVideoTrack()
+        }
+        guard let source = screenVideoSource else { return }
+        if screenCapturer == nil {
+            screenCapturer = RTCVideoCapturer(delegate: source)
+        }
+        guard let capturer = screenCapturer else { return }
+        let processed = videoFrameProcessor?(pixel, 0) ?? pixel
+        let buffer = RTCCVPixelBuffer(pixelBuffer: processed)
+        let seconds = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        let ts = seconds.isFinite && seconds > 0
+            ? Int64(seconds * 1_000_000_000)
+            : Int64(Date().timeIntervalSince1970 * 1_000_000_000)
+        let frame = RTCVideoFrame(buffer: buffer, rotation: Self.rtcRotation(0), timeStampNs: ts)
+        source.capturer(capturer, didCapture: frame)
     }
     
     func stopScreenCapture() {
-        if !isScreenCapturing {
-            print("屏幕共享未在进行中")
+        if !isScreenCapturing && screenVideoTrack == nil {
             return
         }
-        
         isScreenCapturing = false
-        print("停止屏幕共享")
-        
-        // 停止屏幕录制
-        screenRecorder?.stopCapture { error in
-            if let error = error {
-                print("停止屏幕录制失败: \(error)")
-            } else {
-                print("屏幕录制已停止")
-            }
-        }
+        screenRecorder?.stopCapture { _ in }
         screenRecorder = nil
         screenCaptureConfig = nil
+        if let track = screenVideoTrack {
+            removePublishedTrack(track)
+        }
+        screenVideoTrack = nil
+        screenVideoSource = nil
+        screenCapturer = nil
+        eventHandler?.onLocalVideoStateChanged(state: "stopped", error: "screen")
     }
     
     func updateScreenCaptureConfiguration(_ config: ScreenCaptureConfiguration) {
@@ -1215,7 +1391,7 @@ internal class SyRtcEngineImpl {
     
     func setBeautyEffectOptions(_ options: BeautyOptions) {
         beautyOptions = options
-        print("设置美颜选项: enabled=\(options.enabled), lightening=\(options.lighteningLevel), smoothness=\(options.smoothnessLevel)")
+            print("美颜参数已记录。SDK 不内置美颜渲染，请用 setVideoFrameProcessor 处理 CVPixelBuffer。enabled=\(options.enabled)")
         
         // 应用美颜效果
         if options.enabled {
@@ -1457,89 +1633,50 @@ internal class SyRtcEngineImpl {
     // MARK: - 数据流
     
     func createDataStream(reliable: Bool, ordered: Bool) -> Int {
-        let streamId = dataStreams.count + 1
-        
-        // 使用WebRTC的DataChannel创建数据流
-        let config = RTCDataChannelConfiguration()
-        config.isOrdered = ordered
-        // 不同 WebRTC 包/版本字段差异较大：这里先保证 ordered 生效，reliable 作为占位参数
-        
-        // 从PeerConnection创建DataChannel
-        let defaultPeerConnection = peerConnections.values.first ?? createDefaultPeerConnection()
-        
-        guard let peerConnection = defaultPeerConnection else {
-            print("无法创建PeerConnection，DataChannel创建失败")
-            return -1
-        }
-        guard let dataChannel = peerConnection.dataChannel(forLabel: "data_channel_\(streamId)", configuration: config) else {
-            print("DataChannel创建失败: streamId=\(streamId)")
-            return -1
-        }
-        dataChannelMap[streamId] = dataChannel
-        
-        // 设置DataChannel回调
-        dataChannel.delegate = DataChannelDelegate(streamId: streamId, engine: self)
-        
+        let streamId = nextDataStreamId
+        nextDataStreamId += 1
+        dataStreamConfigs[streamId] = (reliable, ordered)
         dataStreams[streamId] = true
-        print("创建数据流: streamId=\(streamId), reliable=\(reliable), ordered=\(ordered), state=\(dataChannel.readyState)")
-        
-        return streamId
-    }
-    
-    private func createDefaultPeerConnection() -> RTCPeerConnection? {
-        guard let factory = peerConnectionFactory else {
-            print("PeerConnectionFactory未初始化")
-            return nil
+        for uid in peerConnections.keys where uid != "default" {
+            guard let pc = peerConnections[uid] else { continue }
+            ensureDataChannel(streamId: streamId, remoteUid: uid, peerConnection: pc)
+            forceOffer(to: uid)
         }
-        
-        let configuration = RTCConfiguration()
-        configuration.iceServers = []
-        configuration.sdpSemantics = .unifiedPlan
-        
-        let peerConnection = factory.peerConnection(with: configuration,
-                                                  constraints: RTCMediaConstraints(mandatoryConstraints: nil,
-                                                                                  optionalConstraints: nil),
-                                                  delegate: nil)
-        
-        peerConnections["default"] = peerConnection
-        print("默认PeerConnection已创建")
-        
-        return peerConnection
+        return streamId
     }
     
     private class DataChannelDelegate: NSObject, RTCDataChannelDelegate {
         let streamId: Int
+        let remoteUid: String
         weak var engine: SyRtcEngineImpl?
         
-        init(streamId: Int, engine: SyRtcEngineImpl) {
+        init(streamId: Int, remoteUid: String, engine: SyRtcEngineImpl) {
             self.streamId = streamId
+            self.remoteUid = remoteUid
             self.engine = engine
         }
         
         func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
-            let uid = engine?.guessRemoteUid() ?? ""
-            print("收到DataChannel消息: streamId=\(streamId), size=\(buffer.data.count) bytes, uid=\(uid)")
-            engine?.eventHandler?.onStreamMessage(uid: uid, streamId: streamId, data: buffer.data)
+            engine?.eventHandler?.onStreamMessage(uid: remoteUid, streamId: streamId, data: buffer.data)
         }
         
-        func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
-            print("DataChannel状态变化: streamId=\(streamId), state=\(dataChannel.readyState)")
-        }
+        func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {}
     }
     
     func sendStreamMessage(streamId: Int, data: Data) {
-        guard dataStreams[streamId] != nil else {
-            print("数据流不存在: streamId=\(streamId)")
+        guard dataStreamConfigs[streamId] != nil else {
+            eventHandler?.onStreamMessageError(uid: currentUid ?? "", streamId: streamId, code: 2, missed: 0, cached: 0)
             return
         }
-        
-        let dataChannel = dataChannelMap[streamId]
-        if let channel = dataChannel, channel.readyState == .open {
-            let buffer = RTCDataBuffer(data: data, isBinary: false)
+        let buffer = RTCDataBuffer(data: data, isBinary: true)
+        var sent = 0
+        for channels in dataChannelsByPeer.values {
+            guard let channel = channels[streamId], channel.readyState == .open else { continue }
             channel.sendData(buffer)
-            print("数据流消息已发送: streamId=\(streamId), size=\(data.count) bytes")
-        } else {
-            print("数据流未打开: streamId=\(streamId)")
+            sent += 1
+        }
+        if sent == 0 {
+            eventHandler?.onStreamMessageError(uid: currentUid ?? "", streamId: streamId, code: 1, missed: 0, cached: 0)
         }
     }
     
@@ -1547,37 +1684,618 @@ internal class SyRtcEngineImpl {
     // MARK: - 清理
     
     func release() {
+        signalingGeneration += 1
+        reconnectWork?.cancel()
+        stopQualityMonitor()
+        volumeIndicationTimer?.invalidate()
+        volumeIndicationTimer = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+        }
+        routeObserver = nil
+        SyRtcReplayKitBridge.shared.onVideoSampleBuffer = nil
         cancelTokenPrivilegeWatch()
         pendingRejoin = false
         signalingClient?.disconnect(sendLeave: true)
         signalingClient = nil
         audioEngine?.stop()
-        
-        // 释放WebRTC资源
         localVideoTrack = nil
+        screenVideoTrack = nil
         localAudioTrack = nil
         videoCapturer = nil
         peerConnectionFactory = nil
-        
-        // 释放屏幕共享资源
         screenRecorder?.stopCapture { _ in }
         screenRecorder = nil
-        
-        // 释放数据流资源
-        dataChannelMap.values.forEach { $0.close() }
+        for channels in dataChannelsByPeer.values {
+            channels.values.forEach { $0.close() }
+        }
+        dataChannelsByPeer.removeAll()
         dataChannelMap.removeAll()
-        
-        // 释放远端视频轨道
-        remoteVideoTracks.values.forEach { $0.isEnabled = false }
         remoteVideoTracks.removeAll()
-        
-        // 释放PeerConnection
+        remoteAudioTracks.removeAll()
         peerConnections.values.forEach { $0.close() }
         peerConnections.removeAll()
-        
         effects.removeAll()
         userVolumes.removeAll()
-        print("所有资源已释放")
+        connectionState = "disconnected"
+    }
+}
+
+// MARK: - 网格媒体、统计、重连
+
+extension SyRtcEngineImpl {
+    fileprivate func startMonitorsIfNeeded() {
+        guard !monitorsStarted else { return }
+        monitorsStarted = true
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let type: String
+            if path.status != .satisfied {
+                type = "none"
+            } else if path.usesInterfaceType(.wifi) {
+                type = "wifi"
+            } else if path.usesInterfaceType(.cellular) {
+                type = "cellular"
+            } else if path.usesInterfaceType(.wiredEthernet) {
+                type = "ethernet"
+            } else {
+                type = "unknown"
+            }
+            DispatchQueue.main.async {
+                self?.networkType = type
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "sy.rtc.path"))
+        pathMonitor = monitor
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.publishCurrentAudioRoute()
+        }
+        SyRtcReplayKitBridge.shared.onVideoSampleBuffer = { [weak self] sample in
+            self?.pushScreenSampleBuffer(sample)
+        }
+    }
+
+    fileprivate func openSignaling(channelId: String, uid: String, token: String) {
+        signalingGeneration += 1
+        let generation = signalingGeneration
+        signalingClient?.disconnect(sendLeave: false)
+        signalingClient = SyRtcSignalingClient(
+            signalingUrl: signalingUrl,
+            channelId: channelId,
+            uid: uid,
+            token: token,
+            onMessage: { [weak self] type, data in
+                self?.handleSignalingMessage(type: type, data: data, channelId: channelId)
+            },
+            onFailure: { [weak self] in
+                guard let self, self.signalingGeneration == generation else { return }
+                self.handleSignalingFailure()
+            }
+        )
+        signalingClient?.connect()
+    }
+
+    fileprivate func handleSignalingFailure() {
+        guard currentChannelId != nil else { return }
+        reconnectWork?.cancel()
+        if reconnectAttempt >= 5 {
+            connectionState = "failed"
+            eventHandler?.onConnectionStateChanged(state: "failed", reason: "signaling_give_up")
+            eventHandler?.onError(code: 1005, message: "信令重连失败")
+            return
+        }
+        let delay = pow(2.0, Double(reconnectAttempt))
+        reconnectAttempt += 1
+        connectionState = "reconnecting"
+        eventHandler?.onConnectionStateChanged(state: "reconnecting", reason: "signaling")
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let channelId = self.currentChannelId, let uid = self.currentUid, let token = self.currentToken else { return }
+            self.pendingRejoin = self.hasFiredJoinSuccess
+            self.openSignaling(channelId: channelId, uid: uid, token: token)
+        }
+        reconnectWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    fileprivate func startQualityMonitor() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.qualityTimer?.invalidate()
+            self.qualityTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                self?.collectStatistics(reportVolume: false, reportQuality: true)
+            }
+        }
+    }
+
+    fileprivate func stopQualityMonitor() {
+        let stop = { [weak self] in
+            self?.qualityTimer?.invalidate()
+            self?.qualityTimer = nil
+        }
+        if Thread.isMainThread {
+            stop()
+        } else {
+            DispatchQueue.main.async(execute: stop)
+        }
+    }
+
+    fileprivate func handleIceState(_ state: RTCIceConnectionState, remoteUid: String) {
+        let name: String
+        let reason: String
+        switch state {
+        case .new, .checking:
+            name = "connecting"
+            reason = "ice_checking"
+        case .connected, .completed:
+            name = "connected"
+            reason = "ice_connected"
+        case .disconnected:
+            name = "reconnecting"
+            reason = "ice_disconnected"
+        case .failed:
+            name = "failed"
+            reason = "ice_failed"
+        case .closed:
+            name = "disconnected"
+            reason = "ice_closed"
+        case .count:
+            return
+        @unknown default:
+            name = "connecting"
+            reason = "ice"
+        }
+        connectionState = name
+        eventHandler?.onConnectionStateChanged(state: name, reason: "\(reason):\(remoteUid)")
+    }
+
+    fileprivate func handlePeerConnectionState(_ state: RTCPeerConnectionState, remoteUid: String) {
+        let name: String
+        switch state {
+        case .new, .connecting: name = "connecting"
+        case .connected: name = "connected"
+        case .disconnected: name = "reconnecting"
+        case .failed: name = "failed"
+        case .closed: name = "disconnected"
+        @unknown default: name = "connecting"
+        }
+        connectionState = name
+        eventHandler?.onConnectionStateChanged(state: name, reason: "pc_\(name):\(remoteUid)")
+    }
+
+    fileprivate func receiveConstraints() -> RTCMediaConstraints {
+        RTCMediaConstraints(
+            mandatoryConstraints: [
+                "OfferToReceiveAudio": "true",
+                "OfferToReceiveVideo": "true"
+            ],
+            optionalConstraints: nil
+        )
+    }
+
+    fileprivate func addTrackIfNeeded(_ track: RTCMediaStreamTrack, to pc: RTCPeerConnection) {
+        let exists = pc.senders.contains { $0.track?.trackId == track.trackId }
+        if !exists {
+            pc.add(track, streamIds: ["stream"])
+        }
+    }
+
+    fileprivate func attachPublishedVideo(_ track: RTCVideoTrack) {
+        for (uid, pc) in peerConnections where uid != "default" {
+            let before = pc.senders.contains { $0.track?.trackId == track.trackId }
+            addTrackIfNeeded(track, to: pc)
+            applyVideoBitrate(to: pc, trackId: track.trackId)
+            if !before {
+                forceOffer(to: uid)
+            }
+        }
+#if canImport(UIKit)
+        if track.trackId == "video_track", let renderer = localRenderer {
+            track.add(renderer)
+        }
+#endif
+    }
+
+    fileprivate func removePublishedTrack(_ track: RTCMediaStreamTrack) {
+        for (uid, pc) in peerConnections where uid != "default" {
+            if let sender = pc.senders.first(where: { $0.track?.trackId == track.trackId }) {
+                pc.removeTrack(sender)
+                forceOffer(to: uid)
+            }
+        }
+    }
+
+    fileprivate func forceOffer(to remoteUid: String) {
+        guard let pc = peerConnections[remoteUid] else { return }
+        if pc.signalingState != .stable {
+            pendingForceOffer.insert(remoteUid)
+            return
+        }
+        offerSentByUid.remove(remoteUid)
+        startOffer(to: remoteUid, force: true)
+    }
+
+    fileprivate func flushRenegotiation(remoteUid: String) {
+        guard pendingForceOffer.remove(remoteUid) != nil else { return }
+        forceOffer(to: remoteUid)
+    }
+
+    fileprivate func applyVideoBitrateToSenders() {
+        let kbps = currentVideoConfig?.bitrate ?? 0
+        guard kbps > 0 else { return }
+        for pc in peerConnections.values {
+            if let id = localVideoTrack?.trackId { applyVideoBitrate(to: pc, trackId: id) }
+            if let id = screenVideoTrack?.trackId { applyVideoBitrate(to: pc, trackId: id) }
+        }
+    }
+
+    fileprivate func applyVideoBitrate(to pc: RTCPeerConnection, trackId: String) {
+        let kbps = currentVideoConfig?.bitrate ?? screenCaptureConfig?.bitrate ?? 0
+        guard kbps > 0 else { return }
+        for sender in pc.senders where sender.track?.trackId == trackId {
+            var params = sender.parameters
+            guard !params.encodings.isEmpty else { continue }
+            params.encodings[0].maxBitrateBps = NSNumber(value: kbps * 1000)
+            sender.parameters = params
+        }
+    }
+
+    fileprivate func ensureCameraFrameRelay() -> CameraFrameRelay {
+        if let cameraFrameRelay { return cameraFrameRelay }
+        let relay = CameraFrameRelay()
+        relay.owner = self
+        cameraFrameRelay = relay
+        return relay
+    }
+
+    fileprivate func ensureCameraVideoSource() -> RTCVideoSource? {
+        if let cameraVideoSource { return cameraVideoSource }
+        guard let factory = peerConnectionFactory else { return nil }
+        let source = factory.videoSource()
+        cameraVideoSource = source
+        return source
+    }
+
+    fileprivate func ensureCameraVideoTrack() -> RTCVideoTrack? {
+        if let localVideoTrack { return localVideoTrack }
+        guard let factory = peerConnectionFactory, let source = ensureCameraVideoSource() else { return nil }
+        let track = factory.videoTrack(with: source, trackId: "video_track")
+        track.isEnabled = !localVideoMuted && canPublishMedia
+        localVideoTrack = track
+        return track
+    }
+
+    fileprivate func ensureScreenVideoTrack() -> RTCVideoTrack? {
+        if let screenVideoTrack { return screenVideoTrack }
+        guard let factory = peerConnectionFactory else { return nil }
+        let source = factory.videoSource()
+        screenVideoSource = source
+        let track = factory.videoTrack(with: source, trackId: "screen_track")
+        track.isEnabled = !localVideoMuted && canPublishMedia
+        screenVideoTrack = track
+        screenCapturer = RTCVideoCapturer(delegate: source)
+        return track
+    }
+
+    @discardableResult
+    fileprivate func startCamera(_ capturer: RTCCameraVideoCapturer, front: Bool) -> Bool {
+        let position: AVCaptureDevice.Position = front ? .front : .back
+        let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
+            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: front ? .back : .front)
+        guard let device else {
+            eventHandler?.onError(code: -1001, message: "没有可用摄像头（模拟器或未授权时常见）")
+            eventHandler?.onLocalVideoStateChanged(state: "failed", error: "no_camera")
+            return false
+        }
+        let fps = currentVideoConfig?.frameRate ?? 15
+        capturer.startCapture(with: device, format: device.activeFormat, fps: fps)
+        return true
+    }
+
+    fileprivate func deliverCameraFrame(_ frame: RTCVideoFrame, capturer: RTCVideoCapturer) {
+        guard let source = cameraVideoSource else { return }
+        guard let processor = videoFrameProcessor, let cv = frame.buffer as? RTCCVPixelBuffer else {
+            source.capturer(capturer, didCapture: frame)
+            return
+        }
+        let rotation = Self.rotationDegrees(frame.rotation)
+        let processed = processor(cv.pixelBuffer, rotation)
+        let buffer = RTCCVPixelBuffer(pixelBuffer: processed)
+        let next = RTCVideoFrame(buffer: buffer, rotation: frame.rotation, timeStampNs: frame.timeStampNs)
+        source.capturer(capturer, didCapture: next)
+    }
+
+    fileprivate static func rotationDegrees(_ rotation: RTCVideoRotation) -> Int {
+        switch rotation {
+        case ._90: return 90
+        case ._180: return 180
+        case ._270: return 270
+        default: return 0
+        }
+    }
+
+    fileprivate static func rtcRotation(_ degrees: Int) -> RTCVideoRotation {
+        switch ((degrees % 360) + 360) % 360 {
+        case 90: return ._90
+        case 180: return ._180
+        case 270: return ._270
+        default: return ._0
+        }
+    }
+
+    fileprivate func attachRemoteTrack(_ track: RTCMediaStreamTrack, uid: String) {
+        if let video = track as? RTCVideoTrack {
+            remoteVideoTracks[uid] = video
+            video.isEnabled = videoMutedStates[uid] != true && !muteAllRemoteVideo
+#if canImport(UIKit)
+            if let renderer = remoteRenderers[uid] {
+                video.add(renderer)
+            }
+#endif
+            if !firstFrameRenderers.keys.contains(uid) {
+                let renderer = FirstFrameRenderer { [weak self] frame in
+                    self?.handleFirstRemoteFrame(frame, uid: uid)
+                }
+                firstFrameRenderers[uid] = renderer
+                video.add(renderer)
+            }
+            eventHandler?.onRemoteVideoStateChanged(uid: uid, state: "decoding", reason: "track", elapsed: elapsedSinceJoin())
+        } else if let audio = track as? RTCAudioTrack {
+            remoteAudioTracks[uid] = audio
+            audio.isEnabled = remoteAudioMuted[uid] != true && !muteAllRemoteAudio
+            eventHandler?.onRemoteAudioStateChanged(uid: uid, state: "decoding", reason: "track", elapsed: elapsedSinceJoin())
+        }
+    }
+
+    fileprivate func handleFirstRemoteFrame(_ frame: RTCVideoFrame, uid: String) {
+        guard firstFrameRenderers[uid] != nil else { return }
+        if let renderer = firstFrameRenderers.removeValue(forKey: uid) {
+            remoteVideoTracks[uid]?.remove(renderer)
+        }
+        let width = Int(frame.width)
+        let height = Int(frame.height)
+        let elapsed = elapsedSinceJoin()
+        eventHandler?.onFirstRemoteVideoDecoded(uid: uid, width: width, height: height, elapsed: elapsed)
+        eventHandler?.onFirstRemoteVideoFrame(uid: uid, width: width, height: height, elapsed: elapsed)
+        eventHandler?.onVideoSizeChanged(uid: uid, width: width, height: height, rotation: Self.rotationDegrees(frame.rotation))
+    }
+
+    fileprivate func elapsedSinceJoin() -> Int {
+        Int((Date().timeIntervalSince(joinStartTime ?? Date())) * 1000)
+    }
+
+    fileprivate func applyRemoteMediaState(_ data: [String: Any]) {
+        let uid = (data["uid"] as? String) ?? ""
+        guard !uid.isEmpty, uid != currentUid else { return }
+        if let audioMuted = boolValue(data["audioMuted"]) {
+            remoteAudioMuted[uid] = audioMuted
+            remoteAudioTracks[uid]?.isEnabled = !audioMuted && !muteAllRemoteAudio
+            eventHandler?.onUserMuteAudio(uid: uid, muted: audioMuted)
+        }
+        if let videoMuted = boolValue(data["videoMuted"]) {
+            videoMutedStates[uid] = videoMuted
+            remoteVideoTracks[uid]?.isEnabled = !videoMuted && !muteAllRemoteVideo
+            eventHandler?.onUserMuteVideo(uid: uid, muted: videoMuted)
+        }
+    }
+
+    fileprivate func republishSideInfo() {
+        if !streamExtraInfo.isEmpty {
+            signalingClient?.sendChannelMessage(streamExtraPrefix + streamExtraInfo)
+        }
+        if localAudioMuted || localVideoMuted || !canPublishMedia {
+            signalingClient?.sendUserMedia(
+                audioMuted: localAudioMuted || !canPublishMedia,
+                videoMuted: localVideoMuted || !canPublishMedia
+            )
+        }
+    }
+
+    fileprivate func boolValue(_ value: Any?) -> Bool? {
+        if let flag = value as? Bool { return flag }
+        if let number = value as? NSNumber { return number.boolValue }
+        return nil
+    }
+
+    fileprivate func ensureDataChannel(streamId: Int, remoteUid: String, peerConnection: RTCPeerConnection) {
+        if dataChannelsByPeer[remoteUid]?[streamId] != nil { return }
+        guard let cfg = dataStreamConfigs[streamId] else { return }
+        let config = RTCDataChannelConfiguration()
+        config.isOrdered = cfg.ordered
+        if !cfg.reliable {
+            config.maxRetransmits = 0
+        }
+        guard let channel = peerConnection.dataChannel(forLabel: "sy-\(streamId)", configuration: config) else { return }
+        channel.delegate = DataChannelDelegate(streamId: streamId, remoteUid: remoteUid, engine: self)
+        dataChannelsByPeer[remoteUid, default: [:]][streamId] = channel
+        dataChannelMap[streamId] = channel
+    }
+
+    fileprivate func attachExistingDataChannels(remoteUid: String, peerConnection: RTCPeerConnection) {
+        for streamId in dataStreamConfigs.keys.sorted() {
+            ensureDataChannel(streamId: streamId, remoteUid: remoteUid, peerConnection: peerConnection)
+        }
+    }
+
+    fileprivate func handleOpenedDataChannel(_ channel: RTCDataChannel, remoteUid: String) {
+        let label = channel.label
+        guard label.hasPrefix("sy-"), let streamId = Int(label.dropFirst(3)) else { return }
+        channel.delegate = DataChannelDelegate(streamId: streamId, remoteUid: remoteUid, engine: self)
+        dataChannelsByPeer[remoteUid, default: [:]][streamId] = channel
+        dataChannelMap[streamId] = channel
+        if dataStreamConfigs[streamId] == nil {
+            dataStreamConfigs[streamId] = (true, channel.isOrdered)
+            dataStreams[streamId] = true
+        }
+    }
+
+    fileprivate func collectStatistics(reportVolume: Bool, reportQuality: Bool) {
+        guard currentChannelId != nil else { return }
+        let pcs = peerConnections.filter { $0.key != "default" }
+        let localUid = currentUid ?? "local"
+        if pcs.isEmpty {
+            if reportQuality {
+                eventHandler?.onNetworkQuality(uid: localUid, txQuality: "unknown", rxQuality: "unknown")
+            }
+            if reportVolume && volumeIntervalMs > 0 {
+                eventHandler?.onVolumeIndication(speakers: [SyVolumeInfo(uid: localUid, volume: localAudioMuted ? 0 : 0, vad: 0)])
+            }
+            return
+        }
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var rows: [(uid: String, quality: String, inbound: Double?, outbound: Double?, rttMs: Double?, loss: Double?)] = []
+        for (uid, pc) in pcs {
+            group.enter()
+            pc.statistics { report in
+                let parsed = Self.parseStatistics(report)
+                lock.lock()
+                rows.append((uid, parsed.quality, parsed.inboundLevel, parsed.outboundLevel, parsed.rttMs, parsed.loss))
+                lock.unlock()
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { [weak self] in
+            guard let self, self.currentChannelId != nil else { return }
+            if reportQuality {
+                let worst = rows.map(\.quality).max(by: { Self.qualityRank($0) < Self.qualityRank($1) }) ?? "unknown"
+                self.eventHandler?.onNetworkQuality(uid: localUid, txQuality: worst, rxQuality: worst)
+                for row in rows {
+                    self.eventHandler?.onNetworkQuality(uid: row.uid, txQuality: row.quality, rxQuality: row.quality)
+                }
+                if let sample = rows.first {
+                    var stats: [String: Any] = ["networkType": self.networkType]
+                    if let rtt = sample.rttMs { stats["rttMs"] = rtt }
+                    if let loss = sample.loss { stats["packetLoss"] = loss }
+                    self.eventHandler?.onRtcStats(stats: stats)
+                }
+            }
+            if reportVolume && self.volumeIntervalMs > 0 {
+                var speakers: [SyVolumeInfo] = []
+                let localLevel = self.localAudioMuted ? 0 : (rows.compactMap(\.outbound).max() ?? 0)
+                speakers.append(self.volumeInfo(uid: localUid, level: localLevel))
+                for row in rows {
+                    speakers.append(self.volumeInfo(uid: row.uid, level: row.inbound ?? 0))
+                }
+                self.eventHandler?.onVolumeIndication(speakers: speakers)
+            }
+        }
+    }
+
+    fileprivate func volumeInfo(uid: String, level: Double) -> SyVolumeInfo {
+        let raw = min(1, max(0, level))
+        let prev = smoothedVolumes[uid] ?? raw
+        let next = volumeSmooth <= 1 ? raw : (prev * Double(volumeSmooth - 1) + raw) / Double(volumeSmooth)
+        smoothedVolumes[uid] = next
+        let volume = Int((next * 255).rounded())
+        let vad = reportVad && raw > 0.02 ? 1 : 0
+        return SyVolumeInfo(uid: uid, volume: volume, vad: vad)
+    }
+
+    fileprivate static func qualityRank(_ quality: String) -> Int {
+        switch quality {
+        case "excellent": return 0
+        case "good": return 1
+        case "poor": return 2
+        case "bad": return 3
+        case "down": return 4
+        default: return -1
+        }
+    }
+
+    fileprivate static func parseStatistics(_ report: RTCStatisticsReport) -> (quality: String, inboundLevel: Double?, outboundLevel: Double?, rttMs: Double?, loss: Double?) {
+        var rttMs: Double?
+        var loss: Double?
+        var inboundLevel: Double?
+        var outboundLevel: Double?
+        for stat in report.statistics.values {
+            let values = stat.values
+            if stat.type == "candidate-pair" {
+                let nominated = (values["nominated"] as? NSNumber)?.boolValue ?? false
+                let state = values["state"] as? String
+                if nominated || state == "succeeded", let rtt = values["currentRoundTripTime"] as? NSNumber {
+                    rttMs = rtt.doubleValue * 1000
+                }
+            } else if stat.type == "inbound-rtp" {
+                let lost = (values["packetsLost"] as? NSNumber)?.doubleValue ?? 0
+                let received = (values["packetsReceived"] as? NSNumber)?.doubleValue ?? 0
+                let total = lost + received
+                if total > 0 {
+                    loss = lost / total
+                }
+                if Self.isAudioStat(stat), let level = values["audioLevel"] as? NSNumber {
+                    inboundLevel = level.doubleValue
+                }
+            } else if stat.type == "outbound-rtp", Self.isAudioStat(stat),
+                      let level = values["audioLevel"] as? NSNumber {
+                outboundLevel = level.doubleValue
+            }
+        }
+        return (SyRtcNetworkQuality.level(rttMs: rttMs, packetLossRatio: loss), inboundLevel, outboundLevel, rttMs, loss)
+    }
+
+    fileprivate static func isAudioStat(_ stat: RTCStatistics) -> Bool {
+        if (stat.values["kind"] as? String) == "audio" { return true }
+        return stat.id.contains("audio")
+    }
+
+    fileprivate func publishCurrentAudioRoute() {
+        let route = currentAudioRoute()
+        speakerphoneEnabled = route == .speaker
+        eventHandler?.onAudioRoutingChanged(routing: route.rawValue)
+    }
+
+    fileprivate func currentAudioRoute() -> SyRtcAudioRoute {
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        for port in outputs {
+            switch port.portType {
+            case .builtInSpeaker:
+                return .speaker
+            case .builtInReceiver:
+                return .earpiece
+            case .headphones, .headsetMic:
+                return .headset
+            case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+                return .bluetooth
+            default:
+                continue
+            }
+        }
+        return .unknown
+    }
+}
+
+private final class CameraFrameRelay: NSObject, RTCVideoCapturerDelegate {
+    weak var owner: SyRtcEngineImpl?
+
+    func capturer(_ capturer: RTCVideoCapturer, didCapture frame: RTCVideoFrame) {
+        owner?.deliverCameraFrame(frame, capturer: capturer)
+    }
+
+    func capturer(_ capturer: RTCVideoCapturer, didCaptureVideoFrame frame: RTCVideoFrame) {
+        owner?.deliverCameraFrame(frame, capturer: capturer)
+    }
+}
+
+private final class FirstFrameRenderer: NSObject, RTCVideoRenderer {
+    private let onFrame: (RTCVideoFrame) -> Void
+    private var fired = false
+
+    init(onFrame: @escaping (RTCVideoFrame) -> Void) {
+        self.onFrame = onFrame
+    }
+
+    func setSize(_ size: CGSize) {}
+
+    func renderFrame(_ frame: RTCVideoFrame?) {
+        guard !fired, let frame else { return }
+        fired = true
+        onFrame(frame)
     }
 }
 

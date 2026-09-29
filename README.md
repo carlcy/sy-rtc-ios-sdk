@@ -211,6 +211,33 @@ rooms.deleteRoomAttribute(channelId: channelId, key: "notice") { _ in }
 
 路径分别是 `POST /api/rtc/channel/meta/set`、`/get`、`/delete`。
 
+## 客户端能力（相对 ZEGO Express）
+
+这些接口跑在本机 WebRTC 网格和控制面信令上。没有 CDN、云端转码、云端录制、服务端 simulcast，也不要把美颜参数当成已经在渲染。
+
+```swift
+engine.switchCamera()
+engine.useFrontCamera(true)
+engine.setAudioRoute(.speaker)          // 只能是 .speaker 或 .earpiece
+engine.setVideoFrameProcessor { pixelBuffer, _ in pixelBuffer }
+engine.enableCustomVideoCapture(true)
+engine.sendCustomVideoFrame(pixelBuffer: buffer)
+engine.setStreamExtraInfo("座位:1")       // 信令附加信息，不是 SEI
+engine.startScreenCapture(ScreenCaptureConfiguration(frameRate: 15, width: 1280, height: 720))
+let streamId = engine.createDataStream(reliable: true, ordered: true)
+engine.sendStreamMessage(streamId: streamId, data: Data("hi".utf8))
+```
+
+Token 失败时把错误转成 `SyRtcServiceError` 看说明：4031 凭证已停用，4032 已吊销，4033 已过期。
+
+```swift
+if let serviceError = error as? SyRtcServiceError {
+    print(serviceError.businessCode ?? -1, serviceError.localizedDescription)
+}
+```
+
+应用内屏幕共享失败（常见于模拟器）会回调 `onError`，不会把状态标成正在共享。系统广播扩展见 [BroadcastExtension/README.md](BroadcastExtension/README.md)，扩展进程里的帧到不了引擎。
+
 ## 示例工程
 
 `example/` 与客户使用同一行依赖：`pod 'SyRtcSDK', '~> 3.2.0'`。步骤见 [example/README.md](example/README.md)。

@@ -115,6 +115,20 @@ internal final class SyRtcSignalingClient {
         ])
     }
 
+    /// 本端麦克风 / 摄像头静音状态。类型是 `user-media`，避免和服务端强制静音的 `mute-audio` 混淆。
+    /// 服务端若丢弃未知类型，对端就收不到；这不是 SFU 强制断流。
+    func sendUserMedia(audioMuted: Bool?, videoMuted: Bool?) {
+        var payload: [String: Any] = ["uid": uid]
+        if let audioMuted { payload["audioMuted"] = audioMuted }
+        if let videoMuted { payload["videoMuted"] = videoMuted }
+        send([
+            "type": "user-media",
+            "channelId": channelId,
+            "uid": uid,
+            "data": payload
+        ])
+    }
+
     func sendLeave() {
         send(["type": "leave", "channelId": channelId, "uid": uid])
     }
