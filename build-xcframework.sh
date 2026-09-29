@@ -1,5 +1,7 @@
 #!/bin/bash
-# 构建 XCFramework 脚本
+# 维护者可选脚本：在已经有 Xcode Framework 工程时打包 XCFramework。
+# 客户不要走这条路径。集成方式是 CocoaPods 版本号或 SPM 的 git URL + 版本 tag，
+# 不要下载或解压 framework / zip。详见 README.md 与 PUBLISH_GUIDE.md。
 # 注意：这需要先在 Xcode 中创建 Framework 项目
 
 set -e

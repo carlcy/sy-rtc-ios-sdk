@@ -136,26 +136,22 @@ class ViewController: UIViewController, UITextFieldDelegate {
         statusLabel.text = "状态: 正在获取 Token..."
         appendLog("获取 Token channel=\(channel) uid=\(uid)")
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        makeRoomService().fetchToken(channelId: channel, uid: uid) { [weak self] result in
             guard let self = self else { return }
-            do {
-                let token = try self.fetchToken(channelId: channel, uid: uid)
-                DispatchQueue.main.async {
-                    self.appendLog("Token 获取成功 (\(token.prefix(16))...)")
-                    self.engine?.join(channelId: channel, uid: uid, token: token)
-                    self.engine?.enableLocalAudio(true)
-                    self.isJoined = true
-                    self.leaveButton.isEnabled = true
-                    self.muteButton.isEnabled = true
-                    self.statusLabel.text = "状态: 已加入 \(channel)"
-                    self.appendLog("已调用 join + enableLocalAudio")
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.appendLog("加入失败: \(error.localizedDescription)")
-                    self.statusLabel.text = "状态: 加入失败"
-                    self.joinButton.isEnabled = true
-                }
+            switch result {
+            case .success(let token):
+                self.appendLog("Token 获取成功 (\(token.prefix(16))...)")
+                self.engine?.join(channelId: channel, uid: uid, token: token)
+                self.engine?.enableLocalAudio(true)
+                self.isJoined = true
+                self.leaveButton.isEnabled = true
+                self.muteButton.isEnabled = true
+                self.statusLabel.text = "状态: 已加入 \(channel)"
+                self.appendLog("已调用 join + enableLocalAudio")
+            case .failure(let error):
+                self.appendLog("加入失败: \(error.localizedDescription)")
+                self.statusLabel.text = "状态: 加入失败"
+                self.joinButton.isEnabled = true
             }
         }
     }
@@ -203,43 +199,33 @@ class ViewController: UIViewController, UITextFieldDelegate {
 
     // MARK: - Token
 
-    private func fetchToken(channelId: String, uid: String) throws -> String {
-        let apiBase = text(apiBaseField).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let appId = text(appIdField)
-        let appSecret = text(appSecretField)
-        let urlStr = "\(apiBase)/api/rtc/token?channelId=\(channelId)&uid=\(uid)&expireHours=24"
-        guard let url = URL(string: urlStr) else {
-            throw NSError(domain: "SyRtcExample", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+    /// 与客户相同：用 SDK 的 `SyRoomService` 访问控制面，而不是在 Demo 里手写一套 HTTP。
+    private func makeRoomService() -> SyRoomService {
+        let service = SyRoomService(apiBaseUrl: text(apiBaseField), appId: text(appIdField))
+        let secret = text(appSecretField)
+        if !secret.isEmpty {
+            service.setAppSecret(secret)
         }
-        var request = URLRequest(url: url, timeoutInterval: 10)
-        request.httpMethod = "POST"
-        request.addValue(appId, forHTTPHeaderField: "X-App-Id")
-        if !appSecret.isEmpty {
-            request.addValue(appSecret, forHTTPHeaderField: "X-App-Secret")
-        }
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        return service
+    }
 
-        var result: String?
-        var fetchError: Error?
-        let sem = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { data, _, error in
-            defer { sem.signal() }
-            if let error = error { fetchError = error; return }
-            guard let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let code = json["code"] as? Int, code == 0,
-                  let token = json["data"] as? String else {
-                fetchError = NSError(domain: "SyRtcExample", code: -2, userInfo: [NSLocalizedDescriptionKey: "Token 响应格式错误"])
-                return
-            }
-            result = token
-        }.resume()
-        sem.wait()
-        if let error = fetchError { throw error }
-        guard let token = result else {
-            throw NSError(domain: "SyRtcExample", code: -3, userInfo: [NSLocalizedDescriptionKey: "Token 为空"])
+    private func renewRtcToken(reason: String) {
+        let channel = text(channelField)
+        let uid = text(uidField)
+        guard !channel.isEmpty, !uid.isEmpty else {
+            appendLog("无法续期 Token：频道或用户 ID 为空")
+            return
         }
-        return token
+        appendLog("Token\(reason)，调用 SyRoomService.renewToken")
+        makeRoomService().renewToken(channelId: channel, uid: uid) { [weak self] result in
+            switch result {
+            case .success(let token):
+                self?.engine?.renewToken(token)
+                self?.appendLog("已 renewToken（\(token.prefix(16))...）")
+            case .failure(let error):
+                self?.appendLog("续期失败: \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - UI
@@ -489,7 +475,13 @@ extension ViewController: SyRtcEventHandler {
 
     func onTokenPrivilegeWillExpire() {
         DispatchQueue.main.async {
-            self.appendLog("Token 即将过期，请重新加入")
+            self.renewRtcToken(reason: "即将过期")
+        }
+    }
+
+    func onRequestToken() {
+        DispatchQueue.main.async {
+            self.renewRtcToken(reason: "已失效")
         }
     }
 

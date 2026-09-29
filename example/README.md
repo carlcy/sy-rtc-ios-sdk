@@ -1,57 +1,42 @@
 # iOS SDK Demo
 
-这是一个完整的 iOS SDK 使用示例项目，使用纯代码 UI（无 Storyboard）。
+示例工程用 CocoaPods **按版本** 依赖 SyRtcSDK，和客户的 `Podfile` 同一行写法。不要 `:path` 指向上级目录，也不要下载、解压 framework。
 
-## 📁 项目结构
+## 依赖
 
-```
-example/
-├── SyRtcSDKExample.xcodeproj/    # Xcode 项目
-├── SyRtcSDKExample.xcworkspace   # CocoaPods 工作空间（用此打开）
-├── SyRtcSDKExample/
-│   ├── ViewController.swift      # 主界面（程序化 UI）
-│   ├── AppDelegate.swift         # 应用入口
-│   └── Info.plist
-├── Podfile
-└── Podfile.lock
+`Podfile`：
+
+```ruby
+pod 'SyRtcSDK', '~> 3.2.0'
 ```
 
-## 🚀 快速开始
+这一行在 [CocoaPods Trunk](https://cocoapods.org) 已有 3.2.0 之后可以直接安装。维护者发布步骤见仓库根目录 [PUBLISH_GUIDE.md](../PUBLISH_GUIDE.md)。
 
-### 1. 安装依赖
+tag `v3.2.0` 已经推到 GitHub、但 Trunk 还没索引时，把 Podfile 改成：
+
+```ruby
+pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.0'
+```
+
+## 运行
 
 ```bash
 cd example
 pod install
-```
-
-### 2. 打开项目
-
-**重要**：请使用 `.xcworkspace` 打开，不要使用 `.xcodeproj`：
-
-```bash
 open SyRtcSDKExample.xcworkspace
 ```
 
-### 3. 构建
+用 `.xcworkspace`，不要用 `.xcodeproj`。
 
-在 Xcode 中选择模拟器或真机，按 Cmd+B 构建。
-
-或使用命令行：
+命令行编模拟器（需要 macOS / Xcode）：
 
 ```bash
 xcodebuild -workspace SyRtcSDKExample.xcworkspace \
   -scheme SyRtcSDKExample \
   -sdk iphonesimulator \
-  -configuration Debug build
+  -destination 'generic/platform=iOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO \
+  build
 ```
 
-### 4. 权限
-
-`Info.plist` 已包含麦克风和摄像头权限说明。
-
-## 📝 使用示例
-
-参考 `SyRtcSDKExample/ViewController.swift`。应用提供初始化、加入/离开房间、音频控制、视频预览等按钮。
-
-完整流程、模拟器限制与真机说明见 [README_EXAMPLE.md](./README_EXAMPLE.md)。
+`Info.plist` 已包含麦克风和摄像头权限说明。流程、模拟器限制见 [README_EXAMPLE.md](./README_EXAMPLE.md)。

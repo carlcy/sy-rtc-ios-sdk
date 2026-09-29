@@ -1,5 +1,21 @@
 # SY RTC iOS SDK 更新日志
 
+## 3.2.0
+
+### 集成
+
+- 明确以**源码**发布：CocoaPods `pod 'SyRtcSDK', '~> 3.2.0'`（Trunk 或 `:git` + `:tag`），Swift Package Manager 用仓库 URL 和 tag `v3.2.0`。
+- SPM 的 WebRTC 改为与 CocoaPods 相同的 `WebRTC-SDK` 125.6422.07 xcframework（`binaryTarget`），不再依赖另一套 `stasel/WebRTC` 141。
+- 示例工程去掉本地 `:path` 依赖，改为与客户相同的版本号。
+
+### 新增
+
+- `SyRoomService.renewToken`：`POST /api/rtc/token/renew`，鉴权与 `fetchToken` 相同。
+- `SyRtcEngine.renewToken` 改为更新当前 RTC Token 并重连信令（不发送 leave、不拆掉已有媒体连接）。Token 为带 `exp` 的 JWT 时，过期前 30 秒回调 `onTokenPrivilegeWillExpire`，过期时回调 `onRequestToken`。
+- `SyRtcEngine.setQualityTier` / `getQualityTier`：本地画质档位 `audio|sd|hd|fhd`。
+- `SyRoomService.switchQualityTier`：`POST /api/rtc/quality/switch`（需要用户 JWT）。
+- `SyRoomService.setRoomAttribute` / `getRoomAttributes` / `deleteRoomAttribute`：房间属性，对应 `POST /api/rtc/channel/meta/set|get|delete`（需要用户 JWT）。
+
 ## 3.1.0
 
 ### 重大变更 / Breaking

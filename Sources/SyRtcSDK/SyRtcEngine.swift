@@ -137,6 +137,10 @@ public class SyRtcEngine {
 
     // MARK: - Token 刷新
 
+    /// 用新的 RTC Token 更新当前会话。
+    ///
+    /// 未进房时只保存 Token。已进房时会用不带 leave 的方式重连信令（URL 上的 token 以服务端为准），已建立的媒体连接保留。
+    /// 新 Token 请向控制面重新申请，例如 `SyRoomService.renewToken`（`POST /api/rtc/token/renew`）。
     public func renewToken(_ token: String) {
         impl?.renewToken(token)
     }
@@ -157,6 +161,23 @@ public class SyRtcEngine {
 
     public func setAudioQuality(_ quality: String) {
         impl?.setAudioQuality(quality)
+    }
+
+    /// 切换本地画质档位（`audio` / `sd` / `hd` / `fhd`），立即作用到音频参数和视频编码配置。
+    ///
+    /// 这只改本端采集。若要让控制面按新档位计费或重签 Token，请调用 `SyRoomService.switchQualityTier`（需要用户 JWT）。
+    public func setQualityTier(_ tier: SyRtcQualityTier) {
+        impl?.setQualityTier(tier.rawValue)
+    }
+
+    /// 与 `setQualityTier(_: SyRtcQualityTier)` 相同，便于直接传入后台返回的字符串。
+    public func setQualityTier(_ tier: String) {
+        impl?.setQualityTier(tier)
+    }
+
+    /// 最近一次成功设置的画质档位；尚未设置时为 `sd`。
+    public func getQualityTier() -> String {
+        impl?.getQualityTier() ?? SyRtcQualityTier.sd.rawValue
     }
 
     // MARK: - 音频设备管理

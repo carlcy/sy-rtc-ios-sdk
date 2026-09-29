@@ -1,589 +1,232 @@
 # SY RTC iOS SDK
 
-SY RTC iOS SDK 是一个用于实时语音通信的 iOS 原生 SDK。
+SY RTC iOS SDK 提供实时音视频通信。本仓库以 **Swift 源码** 分发，客户用版本号集成，不需要下载或解压 framework / zip。
 
-## ✨ 特性
+当前版本：**3.2.0**（git tag `v3.2.0`）。最低系统 iOS 13.0，Swift 5.9，Xcode 15+。
 
-- ✅ 完整的 RTC 功能
-- ✅ Swift 5.0+ 支持
-- ✅ 支持 Swift Package Manager 和 CocoaPods
-- ✅ 异步 API 设计
+## 集成 SDK
 
-## 📦 安装
+任选一种。两种都是「仓库 + 版本」，没有手动拷贝框架这一步。
 
-### 方式一：使用 Swift Package Manager（推荐）
+### CocoaPods
 
-1. 在 Xcode 中打开项目
-2. 选择 **File** → **Add Packages...**
-3. 输入仓库地址：
-   ```
-   https://github.com/carlcy/sy-rtc-ios-sdk.git
-   ```
-4. 选择版本（如 `3.1.0`）
-5. 点击 **Add Package**
-
-### 方式二：使用 CocoaPods
-
-1. **创建 Podfile**
-
-   在项目根目录创建 `Podfile`：
-
-   ```ruby
-   platform :ios, '13.0'
-   use_frameworks!
-
-   target 'YourApp' do
-     pod 'SyRtcSDK', '~> 3.1.0'
-   end
-   ```
-
-   **Apple Silicon（M 系列）提示**：如果你需要在 iOS Simulator 运行，可能需要在 `Podfile` 里排除 `arm64`：
+在业务工程的 `Podfile` 里写：
 
 ```ruby
-post_install do |installer|
-  installer.pods_project.targets.each do |target|
-    target.build_configurations.each do |config|
-      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
-    end
-  end
+source 'https://cdn.cocoapods.org/'
+
+platform :ios, '13.0'
+use_frameworks!
+
+target 'YourApp' do
+  pod 'SyRtcSDK', '~> 3.2.0'
 end
 ```
 
-2. **安装依赖**
+然后：
 
-   ```bash
-   pod install
-   ```
+```bash
+pod install
+```
 
-3. **打开工作空间**
+之后用 `.xcworkspace` 打开工程。
 
-   使用 `.xcworkspace` 文件打开项目，而不是 `.xcodeproj`
+`pod 'SyRtcSDK', '~> 3.2.0'` 在 SDK 发布到 CocoaPods Trunk 之后生效。还没上 Trunk 时，用同一个版本 tag：
 
-### 方式三：手动集成
+```ruby
+pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.0'
+```
 
-1. **下载 XCFramework**
+### Swift Package Manager
 
-   从发布页面下载 `SyRtcSDK.xcframework`
+Xcode：**File → Add Package Dependencies…**，地址填：
 
-2. **添加到项目**
+```text
+https://github.com/carlcy/sy-rtc-ios-sdk.git
+```
 
-   - 在 Xcode 中选择项目
-   - 选择 Target
-   - 进入 **General** → **Frameworks, Libraries, and Embedded Content**
-   - 点击 **+** 添加 `SyRtcSDK.xcframework`
-   - 确保设置为 **Embed & Sign**
+Dependency Rule 选 **Up to Next Major Version**，版本填 `3.2.0`。把产品 `SyRtcSDK` 加到 App target。
 
-## 🚀 快速开始
+如果业务工程本身是 Swift Package，在 `Package.swift` 里写：
 
-### 1. 添加权限
+```swift
+dependencies: [
+    .package(url: "https://github.com/carlcy/sy-rtc-ios-sdk.git", from: "3.2.0")
+],
+targets: [
+    .target(
+        name: "YourApp",
+        dependencies: [
+            .product(name: "SyRtcSDK", package: "SyRtcSDK")
+        ]
+    )
+]
+```
 
-在 `Info.plist` 中添加：
+版本来自 git tag `v3.2.0`，不需要单独上传二进制包。
+
+## 快速开始
+
+下面四步对应一次进房：加依赖（上一节）、初始化、取 Token、加入频道。接口以本仓库源码为准。
+
+### 1. 权限
+
+在 App 的 `Info.plist` 增加：
 
 ```xml
 <key>NSMicrophoneUsageDescription</key>
 <string>需要麦克风权限进行语音通话</string>
+<key>NSCameraUsageDescription</key>
+<string>需要摄像头权限进行视频通话</string>
 ```
 
-### 2. 导入 SDK
-
-```swift
-import SyRtcSDK
-```
-
-### 3. 初始化 SDK
-
-```swift
-let engine = SyRtcEngine.initialize(appId: "your_app_id") // AppId 从用户后台获取
-```
-
-### 4. 设置事件监听
-
-```swift
-engine.setEventHandler { event in
-    switch event {
-    case .userJoined(let uid, let elapsed):
-        print("用户加入: \(uid), 耗时: \(elapsed)ms")
-    case .userOffline(let uid, let reason):
-        print("用户离开: \(uid), 原因: \(reason)")
-    case .volumeIndication(let speakers):
-        speakers.forEach { info in
-            print("用户 \(info.uid) 音量: \(info.volume)")
-        }
-    }
-}
-```
-
-### 5. 加入房间
-
-```swift
-// 先从服务器获取 Token（不能在前端直接生成）
-let token = try await getTokenFromServer(appId: appId, channelId: channelId, uid: uid)
-
-// 加入房间
-try await engine.join(channelId: channelId, uid: uid, token: token)
-```
-
-### 5.1 设置后端 API 认证 Token
-
-```swift
-// 用于调用需要登录认证的后端业务接口（与 join 的 RTC Token 不同）
-engine.setApiAuthToken(jwt)
-```
-
-### 6. 控制音频
-
-```swift
-// 启用本地音频
-try await engine.enableLocalAudio(enabled: true)
-
-// 静音
-try await engine.muteLocalAudio(muted: true)
-
-// 取消静音
-try await engine.muteLocalAudio(muted: false)
-```
-
-### 7. 设置角色
-
-```swift
-// 设置为主播
-try await engine.setClientRole(.host)
-
-// 设置为观众
-try await engine.setClientRole(.audience)
-```
-
-### 8. 离开房间
-
-```swift
-try await engine.leave()
-```
-
-### 9. 释放资源
-
-```swift
-engine.release()
-```
-
-## 📖 完整示例
-
-```swift
-import UIKit
-import SyRtcSDK
-
-class ViewController: UIViewController {
-    var engine: SyRtcEngine?
-    var isJoined = false
-    
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        
-        // 请求麦克风权限
-        requestMicrophonePermission()
-        
-        // 初始化引擎
-        initEngine()
-    }
-    
-    func requestMicrophonePermission() {
-        AVAudioSession.sharedInstance().requestRecordPermission { granted in
-            if granted {
-                print("麦克风权限已授予")
-            } else {
-                print("麦克风权限被拒绝")
-            }
-        }
-    }
-    
-    func initEngine() {
-        engine = SyRtcEngine.initialize(appId: "your_app_id")
-        
-        engine?.setEventHandler { [weak self] event in
-            switch event {
-            case .userJoined(let uid, let elapsed):
-                print("用户加入: \(uid)")
-            case .userOffline(let uid, let reason):
-                print("用户离开: \(uid)")
-            case .volumeIndication(let speakers):
-                // 处理音量指示
-                break
-            }
-        }
-    }
-    
-    @IBAction func joinChannel() {
-        guard !isJoined else { return }
-        
-        Task {
-            do {
-                // 从服务器获取 Token
-                let token = try await getTokenFromServer()
-                
-                // 加入房间
-                try await engine?.join(
-                    channelId: "channel_001",
-                    uid: "user_001",
-                    token: token
-                )
-                
-                // 启用本地音频
-                try await engine?.enableLocalAudio(enabled: true)
-                
-                isJoined = true
-            } catch {
-                print("加入房间失败: \(error)")
-            }
-        }
-    }
-    
-    @IBAction func leaveChannel() {
-        guard isJoined else { return }
-        
-        Task {
-            do {
-                try await engine?.leave()
-                isJoined = false
-            } catch {
-                print("离开房间失败: \(error)")
-            }
-        }
-    }
-    
-    func getTokenFromServer() async throws -> String {
-        // 调用服务器 API 获取 Token
-        // 这里需要实现 HTTP 请求
-        let url = URL(string: "https://your-api.com/rtc/token")!
-        let (data, _) = try await URLSession.shared.data(from: url)
-        let response = try JSONDecoder().decode(TokenResponse.self, from: data)
-        return response.data.token
-    }
-    
-    deinit {
-        engine?.release()
-    }
-}
-```
-
-## 📚 API 文档
-
-### SyRtcEngine
-
-#### 初始化
-
-```swift
-static func initialize(appId: String) -> SyRtcEngine
-```
-
-初始化 RTC 引擎。
-
-**参数：**
-- `appId`: 应用ID，从用户后台获取
-
-**返回：**
-- `SyRtcEngine`: 引擎实例
-
-#### 加入房间
-
-```swift
-func join(channelId: String, uid: String, token: String) async throws
-```
-
-加入语音房间。
-
-**参数：**
-- `channelId`: 房间ID
-- `uid`: 用户ID（字符串类型）
-- `token`: 鉴权Token（从服务器获取）
-
-**抛出：**
-- `RtcError`: 如果加入失败
-
-#### 离开房间
-
-```swift
-func leave() async throws
-```
-
-离开当前房间。
-
-**抛出：**
-- `RtcError`: 如果离开失败
-
-#### 启用/禁用本地音频
-
-```swift
-func enableLocalAudio(enabled: Bool) async throws
-```
-
-启用或禁用本地音频采集和播放。
-
-**参数：**
-- `enabled`: `true` 为启用，`false` 为禁用
-
-**抛出：**
-- `RtcError`: 如果操作失败
-
-#### 静音/取消静音
-
-```swift
-func muteLocalAudio(muted: Bool) async throws
-```
-
-静音或取消静音本地音频。
-
-**参数：**
-- `muted`: `true` 为静音，`false` 为取消静音
-
-**抛出：**
-- `RtcError`: 如果操作失败
-
-#### 设置客户端角色
-
-```swift
-func setClientRole(_ role: RtcClientRole) async throws
-```
-
-设置客户端角色。
-
-**参数：**
-- `role`: `.host` 或 `.audience`
-
-**抛出：**
-- `RtcError`: 如果操作失败
-
-#### 设置事件监听
-
-```swift
-func setEventHandler(_ handler: ((RtcEvent) -> Void)?)
-```
-
-设置事件监听器。
-
-**参数：**
-- `handler`: 事件处理闭包，`nil` 表示移除监听
-
-#### 释放资源
-
-```swift
-func release()
-```
-
-释放引擎资源。在不再使用引擎时调用。
-
-### RtcEvent
-
-事件枚举：
-
-```swift
-enum RtcEvent {
-    case userJoined(uid: String, elapsed: Int)
-    case userOffline(uid: String, reason: String)
-    case volumeIndication(speakers: [VolumeInfo])
-}
-```
-
-**事件说明：**
-- `userJoined`: 当有用户加入房间时触发
-  - `uid`: 用户ID
-  - `elapsed`: 加入耗时（毫秒）
-- `userOffline`: 当有用户离开房间时触发
-  - `uid`: 用户ID
-  - `reason`: 离开原因
-- `volumeIndication`: 当检测到用户音量变化时触发
-  - `speakers`: 说话者列表
-
-### RtcClientRole
-
-客户端角色枚举：
-
-```swift
-enum RtcClientRole {
-    case host      // 主播，可以说话
-    case audience  // 观众，只能听
-}
-```
-
-### VolumeInfo
-
-音量信息：
-
-```swift
-struct VolumeInfo {
-    let uid: String    // 用户ID
-    let volume: Int    // 音量（0-255）
-}
-```
-
-### RtcError
-
-错误类型：
-
-```swift
-enum RtcError: Error {
-    case invalidAppId
-    case invalidToken
-    case networkError
-    case permissionDenied
-    case unknown(Int)
-}
-```
-
-## 🔑 如何获取 Token？
-
-**重要**：Token 必须从服务器获取，不能在前端直接生成！
-
-### 推荐流程
-
-1. **客户端请求加入房间**
-   ```swift
-   let url = URL(string: "https://your-api.com/rtc/token")!
-   var request = URLRequest(url: url)
-   request.httpMethod = "POST"
-   request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-   
-   let body = [
-       "appId": appId,
-       "channelId": channelId,
-       "uid": uid
-   ]
-   request.httpBody = try JSONSerialization.data(withJSONObject: body)
-   
-   let (data, _) = try await URLSession.shared.data(for: request)
-   let response = try JSONDecoder().decode(TokenResponse.self, from: data)
-   let token = response.data.token
-   ```
-
-2. **服务器生成 Token**
-   ```java
-   // 服务器代码（Java Spring Boot）
-   @PostMapping("/rtc/token")
-   public Result<String> generateToken(@RequestBody TokenRequest request) {
-       String token = rtcService.generateToken(
-           request.getAppId(),
-           request.getChannelId(),
-           request.getUid()
-       );
-       return Result.success(token);
-   }
-   ```
-
-3. **客户端使用 Token 加入房间**
-   ```swift
-   try await engine.join(channelId: channelId, uid: uid, token: token)
-   ```
-
-## ⚙️ 项目配置
-
-### 最低要求
-
-- **iOS**: 13.0+
-- **Swift**: 5.0+
-- **Xcode**: 14.0+
-
-### 权限配置
-
-在 `Info.plist` 中添加：
-
-```xml
-<key>NSMicrophoneUsageDescription</key>
-<string>需要麦克风权限进行语音通话</string>
-```
-
-### 运行时权限请求
-
-iOS 需要动态请求麦克风权限：
+进房前请求麦克风权限：
 
 ```swift
 import AVFoundation
 
 AVAudioSession.sharedInstance().requestRecordPermission { granted in
-    if granted {
-        print("麦克风权限已授予")
-    } else {
-        print("麦克风权限被拒绝")
+    print(granted ? "麦克风已授权" : "麦克风被拒绝")
+}
+```
+
+### 2. 初始化
+
+```swift
+import SyRtcSDK
+
+let engine = SyRtcEngine.shared
+engine.initialize(appId: appId) // AppId 从控制台获取
+engine.setApiBaseUrl("https://syrtcapi.shengyuchenyao.cn")
+engine.setSignalingServerUrl("wss://syrtcapi.shengyuchenyao.cn/ws/signaling")
+engine.setEventHandler(self)
+```
+
+`SyRtcEventHandler` 里至少实现 `onUserJoined`、`onUserOffline`、`onVolumeIndication`。Token 续期实现 `onTokenPrivilegeWillExpire` 和 `onRequestToken`（有默认空实现，不写也能编译）。
+
+### 3. 获取 Token
+
+RTC Token 由控制面签发，不要在客户端用 AppSecret 自己拼。业务服务器调用 `POST /api/rtc/token`，再把字符串 Token 交给 App。
+
+Demo 或已持有 AppSecret 的测试包可以用 `SyRoomService`：
+
+```swift
+let rooms = SyRoomService(apiBaseUrl: "https://syrtcapi.shengyuchenyao.cn", appId: appId)
+rooms.setAppSecret(appSecret) // 仅测试。正式 App 让你们自己的服务器签发 Token
+
+rooms.fetchToken(channelId: channelId, uid: uid, qualityTier: "sd") { result in
+    switch result {
+    case .success(let token):
+        engine.join(channelId: channelId, uid: uid, token: token)
+        engine.enableLocalAudio(true)
+    case .failure(let error):
+        print("获取 Token 失败: \(error)")
     }
 }
 ```
 
-### Podfile 配置（如果使用 CocoaPods）
+`qualityTier` 可选：`audio`、`sd`、`hd`、`fhd`。
 
-```ruby
-platform :ios, '13.0'
-use_frameworks!
+### 4. 加入频道
 
-target 'YourApp' do
-  pod 'SyRtcSDK', '~> 3.1.0'
-end
-```
-
-## 📦 构建 XCFramework
-
-如果需要构建 XCFramework：
-
-```bash
-./build-xcframework.sh
-```
-
-构建完成后，XCFramework 位于 `build/` 目录。
-
-## ❓ 常见问题
-
-### 1. 无法加入房间？
-
-**可能原因：**
-- Token 无效或已过期
-- 网络连接问题
-- 权限未授予
-
-**解决方法：**
-- 重新从服务器获取 Token
-- 检查网络连接
-- 确保已授予麦克风权限
-
-### 2. 没有声音？
-
-**可能原因：**
-- 本地音频未启用
-- 已静音
-- 角色设置为观众
-
-**解决方法：**
 ```swift
-// 启用本地音频
-try await engine.enableLocalAudio(enabled: true)
-
-// 取消静音
-try await engine.muteLocalAudio(muted: false)
-
-// 设置为主播
-try await engine.setClientRole(.host)
+engine.join(channelId: channelId, uid: uid, token: token)
+engine.enableLocalAudio(true)
 ```
 
-### 3. 编译错误？
+加入成功会回调 `onJoinChannelSuccess(channelId:uid:elapsed:)`。远端用户进入时回调 `onUserJoined`。
 
-**可能原因：**
-- Swift 版本不兼容
-- 依赖冲突
+离开并释放：
 
-**解决方法：**
-- 确保 Swift 版本 >= 5.0
-- 检查依赖版本冲突
-- 清理构建缓存：`Product → Clean Build Folder`
+```swift
+engine.leave()
+engine.release()
+```
 
-## 📱 平台要求
+角色（主播可说话，观众只听）：
 
-- **iOS**: 13.0+
-- **Swift**: 5.0+
-- **Xcode**: 14.0+
+```swift
+engine.setClientRole(.host)     // 或 .audience / .publisher / .subscriber
+```
 
-## 📄 许可证
+## 续期 Token
+
+Token 快过期时 SDK 会回调 `onTokenPrivilegeWillExpire`（JWT 且带 `exp` 时，提前 30 秒）。已经过期时回调 `onRequestToken`。收到后向控制面续期，再交给引擎，不要先 `leave`：
+
+```swift
+func onTokenPrivilegeWillExpire() {
+    rooms.renewToken(channelId: channelId, uid: uid) { result in
+        if case .success(let token) = result {
+            engine.renewToken(token)
+        }
+    }
+}
+```
+
+`SyRoomService.renewToken` 对应 `POST /api/rtc/token/renew`，鉴权与 `fetchToken` 相同（`X-App-Id` + `X-App-Secret`，或用户 JWT）。`SyRtcEngine.renewToken` 会更新当前会话的信令 Token，已建立的媒体连接保留。
+
+## 切换画质
+
+本地采集立刻生效（不需要登录）：
+
+```swift
+engine.setQualityTier(.hd)          // .audio / .sd / .hd / .fhd
+engine.setQualityTier("fhd")        // 直接传后台字符串也可以
+```
+
+控制面档位（计费 / 权益）走 `POST /api/rtc/quality/switch`，**必须是用户 JWT**（`setAuthToken`）。只带 AppSecret 会返回未登录。
+
+```swift
+rooms.setAuthToken(userJwt)
+rooms.switchQualityTier(channelId: channelId, qualityTier: "hd", uid: uid) { result in
+    switch result {
+    case .success(let newToken):
+        engine.setQualityTier(.hd)
+        if let newToken { engine.renewToken(newToken) }
+    case .failure(let error):
+        print(error)
+    }
+}
+```
+
+若接口没有返回新 Token，用新的 `qualityTier` 再调一次 `fetchToken` / `renewToken`。
+
+## 房间属性
+
+对应控制面频道元数据（ZEGO 房间附加信息那种 key-value），**同样需要用户 JWT**：
+
+```swift
+rooms.setAuthToken(userJwt)
+
+rooms.setRoomAttribute(channelId: channelId, key: "notice", value: "欢迎") { _ in }
+
+rooms.getRoomAttributes(channelId: channelId) { result in
+    if case .success(let attrs) = result {
+        print(attrs) // [String: String]
+    }
+}
+
+rooms.deleteRoomAttribute(channelId: channelId, key: "notice") { _ in }
+```
+
+路径分别是 `POST /api/rtc/channel/meta/set`、`/get`、`/delete`。
+
+## 示例工程
+
+`example/` 与客户使用同一行依赖：`pod 'SyRtcSDK', '~> 3.2.0'`。步骤见 [example/README.md](example/README.md)。
+
+## 发布新版本
+
+维护者打 tag、`pod trunk push` 的完整命令在 [PUBLISH_GUIDE.md](PUBLISH_GUIDE.md)。
+
+## 常见问题
+
+**进不了房间。** Token 过期、AppId 不对，或麦克风权限没给。重新 `fetchToken` 再 `join`。
+
+**没有声音。** 确认已 `enableLocalAudio(true)`，没有 `muteLocalAudio(true)`，角色不是观众。
+
+**画质或房间属性接口返回未登录。** 这两个接口不认 AppSecret，先 `setAuthToken` 传入用户 JWT。
+
+## 许可证
 
 MIT License
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
----
-
-**最后更新**: 2026-01-14

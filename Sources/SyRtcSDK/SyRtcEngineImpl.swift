@@ -73,6 +73,10 @@ internal class SyRtcEngineImpl {
     private var currentToken: String?
     // 后端 API 认证用的 JWT
     private var apiAuthToken: String?
+    private var pendingRejoin = false
+    private var tokenWarnWork: DispatchWorkItem?
+    private var tokenExpireWork: DispatchWorkItem?
+    private var currentQualityTier: String = SyRtcQualityTier.sd.rawValue
     
     // 多人语聊（Mesh）：每个远端用户一条 PeerConnection（key=remoteUid）
     private var offerSentByUid: Set<String> = []
@@ -152,6 +156,8 @@ internal class SyRtcEngineImpl {
         currentChannelId = channelId
         currentUid = uid
         currentToken = token
+        pendingRejoin = false
+        scheduleTokenPrivilegeWatch(token: token)
         offerSentByUid.removeAll()
         remoteSdpSetByUid.removeAll()
         pendingLocalIceByUid.removeAll()
@@ -183,8 +189,10 @@ internal class SyRtcEngineImpl {
         remoteSdpSetByUid.removeAll()
         pendingLocalIceByUid.removeAll()
         pendingRemoteIceByUid.removeAll()
-        signalingClient?.disconnect()
+        signalingClient?.disconnect(sendLeave: true)
         signalingClient = nil
+        pendingRejoin = false
+        cancelTokenPrivilegeWatch()
 
         let channelId = currentChannelId ?? ""
         currentChannelId = nil
@@ -238,14 +246,22 @@ internal class SyRtcEngineImpl {
             guard let localUid = currentUid, let chId = currentChannelId else { return }
             // 服务端 data.users 可能是 [String] 或 JSON 反序列化后的 [Any]，需兼容
             let users: [String] = (data["users"] as? [String]) ?? (data["users"] as? [Any])?.compactMap { $0 as? String } ?? []
+            let rejoining = pendingRejoin
             if !hasFiredJoinSuccess {
                 hasFiredJoinSuccess = true
                 let elapsed = Int((Date().timeIntervalSince(joinStartTime ?? Date())) * 1000)
                 eventHandler?.onJoinChannelSuccess(channelId: chId, uid: localUid, elapsed: max(0, elapsed))
                 eventHandler?.onConnectionStateChanged(state: "connected", reason: "join_success")
+            } else if pendingRejoin {
+                pendingRejoin = false
+                let elapsed = Int((Date().timeIntervalSince(joinStartTime ?? Date())) * 1000)
+                eventHandler?.onRejoinChannelSuccess(channelId: chId, uid: localUid, elapsed: max(0, elapsed))
             }
             for u in users where u != localUid {
-                eventHandler?.onUserJoined(uid: u, elapsed: 0)
+                let known = peerConnections[u] != nil
+                if !rejoining || !known {
+                    eventHandler?.onUserJoined(uid: u, elapsed: 0)
+                }
                 if peerConnections[u] == nil { _ = createPeerConnection(remoteUid: u) }
                 if shouldInitiateOffer(localUid: localUid, remoteUid: u) {
                     startOffer(to: u)
@@ -310,6 +326,10 @@ internal class SyRtcEngineImpl {
             let fromUid = (data["uid"] as? String) ?? ""
             let msg = (data["message"] as? String) ?? ""
             eventHandler?.onChannelMessage(uid: fromUid, message: msg)
+        case "token-will-expire", "token-privilege-will-expire":
+            eventHandler?.onTokenPrivilegeWillExpire()
+        case "token-expired", "request-token":
+            eventHandler?.onRequestToken()
         case "error":
             let msg = (data["error"] as? String) ?? "信令错误"
             eventHandler?.onError(code: 1002, message: msg)
@@ -590,48 +610,107 @@ internal class SyRtcEngineImpl {
     // MARK: - Token刷新
     
     func renewToken(_ token: String) {
-        guard !token.isEmpty else {
-            print("Token为空")
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            eventHandler?.onError(code: 1000, message: "token 不能为空")
             return
         }
-        
-        print("更新Token: \(token.prefix(20))...")
-        
-        // 更新所有PeerConnection的配置
-        peerConnections.values.forEach { peerConnection in
-            let configuration = peerConnection.configuration
-            
-            // 更新ICE服务器配置中的Token
-            var updatedIceServers: [RTCIceServer] = []
-            for iceServer in configuration.iceServers {
-                var updatedUrls: [String] = []
-                for url in iceServer.urlStrings {
-                    if url.contains("token=") {
-                        let newUrl = String(url.prefix(while: { $0 != "?" })) + "?token=\(token)"
-                        updatedUrls.append(newUrl)
-                    } else {
-                        updatedUrls.append(url)
-                    }
-                }
-                
-                let updatedServer = RTCIceServer(urlStrings: updatedUrls,
-                                                username: iceServer.username,
-                                                credential: iceServer.credential)
-                updatedIceServers.append(updatedServer)
-            }
-            
-            // 创建新配置
-            let newConfiguration = RTCConfiguration()
-            newConfiguration.iceServers = updatedIceServers
-            newConfiguration.sdpSemantics = configuration.sdpSemantics
-            newConfiguration.continualGatheringPolicy = configuration.continualGatheringPolicy
-            
-            // 应用新配置
-            peerConnection.setConfiguration(newConfiguration)
-            print("PeerConnection Token更新成功: \(peerConnection.connectionState)")
+        currentToken = trimmed
+        scheduleTokenPrivilegeWatch(token: trimmed)
+        guard let channelId = currentChannelId, let uid = currentUid else {
+            return
         }
-        
-        print("Token更新完成，已更新 \(peerConnections.count) 个PeerConnection")
+        // 信令 URL 上的 token 才是服务端校验依据。重连 WebSocket，不拆掉已有 PeerConnection。
+        let wasInChannel = signalingClient != nil && hasFiredJoinSuccess
+        signalingClient?.disconnect(sendLeave: false)
+        signalingClient = SyRtcSignalingClient(signalingUrl: signalingUrl, channelId: channelId, uid: uid, token: trimmed) { [weak self] type, data in
+            self?.handleSignalingMessage(type: type, data: data, channelId: channelId)
+        }
+        pendingRejoin = wasInChannel
+        signalingClient?.connect()
+    }
+
+    func getQualityTier() -> String {
+        currentQualityTier
+    }
+
+    /// 按控制面档位切换本地采集参数。`audio|sd|hd|fhd`。
+    /// 服务端权益切换请另外调用 `SyRoomService.switchQualityTier`（需要用户 JWT）。
+    func setQualityTier(_ tier: String) {
+        guard let parsed = SyRtcQualityTier.parse(tier) else {
+            eventHandler?.onError(code: 1003, message: "未知画质档位: \(tier)，可选 audio/sd/hd/fhd")
+            return
+        }
+        currentQualityTier = parsed.rawValue
+        switch parsed {
+        case .audio:
+            setAudioQuality("low")
+            isVideoEnabled = false
+            localVideoTrack?.isEnabled = false
+        case .sd:
+            setAudioQuality("medium")
+            enableVideo()
+            setVideoEncoderConfiguration(width: 640, height: 360, frameRate: 15, bitrate: 400)
+        case .hd:
+            setAudioQuality("high")
+            enableVideo()
+            setVideoEncoderConfiguration(width: 1280, height: 720, frameRate: 15, bitrate: 1200)
+        case .fhd:
+            setAudioQuality("ultra")
+            enableVideo()
+            setVideoEncoderConfiguration(width: 1920, height: 1080, frameRate: 30, bitrate: 2500)
+        }
+    }
+
+    private func cancelTokenPrivilegeWatch() {
+        tokenWarnWork?.cancel()
+        tokenExpireWork?.cancel()
+        tokenWarnWork = nil
+        tokenExpireWork = nil
+    }
+
+    /// RTC Token 若是带 `exp` 的 JWT，则在过期前 30 秒回调 `onTokenPrivilegeWillExpire`，过期时回调 `onRequestToken`。
+    private func scheduleTokenPrivilegeWatch(token: String) {
+        cancelTokenPrivilegeWatch()
+        guard let exp = Self.jwtExpiry(token) else { return }
+        let remain = exp - Date().timeIntervalSince1970
+        guard remain.isFinite else { return }
+        if remain <= 0 {
+            DispatchQueue.main.async { [weak self] in
+                self?.eventHandler?.onRequestToken()
+            }
+            return
+        }
+        let warn = DispatchWorkItem { [weak self] in
+            guard let self, self.currentChannelId != nil else { return }
+            self.eventHandler?.onTokenPrivilegeWillExpire()
+        }
+        let expired = DispatchWorkItem { [weak self] in
+            guard let self, self.currentChannelId != nil else { return }
+            self.eventHandler?.onRequestToken()
+        }
+        tokenWarnWork = warn
+        tokenExpireWork = expired
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, remain - 30), execute: warn)
+        DispatchQueue.main.asyncAfter(deadline: .now() + remain, execute: expired)
+    }
+
+    private static func jwtExpiry(_ token: String) -> TimeInterval? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let pad = (4 - (b64.count % 4)) % 4
+        if pad > 0 { b64 += String(repeating: "=", count: pad) }
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let exp = obj["exp"] as? TimeInterval { return exp }
+        if let exp = obj["exp"] as? Int { return TimeInterval(exp) }
+        if let exp = obj["exp"] as? NSNumber { return exp.doubleValue }
+        return nil
     }
     
     // MARK: - 音频配置
@@ -1468,6 +1547,10 @@ internal class SyRtcEngineImpl {
     // MARK: - 清理
     
     func release() {
+        cancelTokenPrivilegeWatch()
+        pendingRejoin = false
+        signalingClient?.disconnect(sendLeave: true)
+        signalingClient = nil
         audioEngine?.stop()
         
         // 释放WebRTC资源
