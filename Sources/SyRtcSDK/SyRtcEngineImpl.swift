@@ -2181,7 +2181,11 @@ extension SyRtcEngineImpl {
                     self.eventHandler?.onNetworkQuality(uid: row.uid, txQuality: row.quality, rxQuality: row.quality)
                 }
                 if let sample = rows.first {
-                    var stats: [String: Any] = ["networkType": self.networkType]
+                    var stats: [String: Any] = [
+                        "networkType": self.networkType,
+                        "uid": sample.uid,
+                        "quality": sample.quality
+                    ]
                     if let rtt = sample.rttMs { stats["rttMs"] = rtt }
                     if let loss = sample.loss { stats["packetLoss"] = loss }
                     self.eventHandler?.onRtcStats(stats: stats)
