@@ -18,6 +18,7 @@
 - `SyRtcServiceError`：获取或续期 Token 时识别业务码 4031（凭证已停用）、4032（已吊销）、4033（已过期），HTTP 4xx 也会先读 JSON `code`。
 - 网络质量：`onNetworkQuality` 使用 WebRTC candidate-pair RTT 与 inbound-rtp 丢包，没有统计时为 `unknown`。`getNetworkType` 来自 `NWPathMonitor`（wifi / cellular / ethernet / none），有网本身不算 excellent。
 - 设备：`switchCamera` / `useFrontCamera`，`setAudioRoute` 只在扬声器和听筒之间切换；蓝牙和有线耳机只通过 `onAudioRoutingChanged` 上报。
+- 音频设备：`enumerateRecordingDevices` 返回 `AVAudioSession.availableInputs`（uid / portName），`setRecordingDevice` 调 `setPreferredInput`，找不到或失败返回 -1。`enumeratePlaybackDevices` 只列能主动切换的 `speaker` / `earpiece`，`setPlaybackDevice` 对其他 id 返回 -1。
 - `setVideoFrameProcessor`：本地 `CVPixelBuffer` 前处理钩子。`setBeautyEffectOptions` 只记录参数，不内置美颜渲染。
 - 屏幕共享：`startScreenCapture` 把应用内 `RPScreenRecorder` 帧送进 WebRTC，并重新发 offer。`BroadcastExtension/` 只是广播扩展脚手架，不跨进程传帧。主 App 进程可调用 `pushScreenSampleBuffer`。
 - 静音：`muteLocalAudio` / `muteLocalVideoStream` 会关轨道，并用信令类型 `user-media` 通知对端（`onUserMuteAudio` / `onUserMuteVideo`）。这不是 SFU 强制断流；服务端 `mute-audio` 仍走 `onServerMuteAudio`。

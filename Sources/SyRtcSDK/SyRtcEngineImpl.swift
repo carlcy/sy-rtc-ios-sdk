@@ -928,31 +928,43 @@ internal class SyRtcEngineImpl {
     // MARK: - 音频设备管理
     
     func enumerateRecordingDevices() -> [AudioDeviceInfo] {
-        return [AudioDeviceInfo(deviceId: "default", deviceName: "默认麦克风")]
+        let inputs = AVAudioSession.sharedInstance().availableInputs ?? []
+        return inputs.map { AudioDeviceInfo(deviceId: $0.uid, deviceName: $0.portName) }
     }
     
     func enumeratePlaybackDevices() -> [AudioDeviceInfo] {
+        // 只有这两项会真正改 AVAudioSession。蓝牙和有线耳机由系统路由决定，见 onAudioRoutingChanged。
         return [
-            AudioDeviceInfo(deviceId: "default", deviceName: "默认扬声器"),
             AudioDeviceInfo(deviceId: "speaker", deviceName: "扬声器"),
-            AudioDeviceInfo(deviceId: "earpiece", deviceName: "听筒"),
-            AudioDeviceInfo(deviceId: "bluetooth", deviceName: "蓝牙耳机")
+            AudioDeviceInfo(deviceId: "earpiece", deviceName: "听筒")
         ]
     }
     
     func setRecordingDevice(_ deviceId: String) -> Int {
-        print("设置录音设备: \(deviceId)")
-        return 0
+        let session = AVAudioSession.sharedInstance()
+        guard let port = session.availableInputs?.first(where: { $0.uid == deviceId }) else {
+            return -1
+        }
+        do {
+            try session.setPreferredInput(port)
+            return 0
+        } catch {
+            print("设置录音设备失败: \(error)")
+            return -1
+        }
     }
     
     func setPlaybackDevice(_ deviceId: String) -> Int {
-        if deviceId == "speaker" {
+        switch deviceId {
+        case "speaker":
             setEnableSpeakerphone(true)
-        } else if deviceId == "earpiece" {
+            return 0
+        case "earpiece":
             setEnableSpeakerphone(false)
+            return 0
+        default:
+            return -1
         }
-        print("设置播放设备: \(deviceId)")
-        return 0
     }
     
     func getRecordingDeviceVolume() -> Int {
