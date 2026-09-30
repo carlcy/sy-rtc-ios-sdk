@@ -226,7 +226,12 @@ engine.setStreamExtraInfo("座位:1")       // 信令附加信息，不是 SEI
 engine.startScreenCapture(ScreenCaptureConfiguration(frameRate: 15, width: 1280, height: 720))
 let streamId = engine.createDataStream(reliable: true, ordered: true)
 engine.sendStreamMessage(streamId: streamId, data: Data("hi".utf8))
+engine.sendSei(streamId: streamId, data: Data("ts=123".utf8))  // 对端 onSeiMessage，DataChannel 前缀，不是码流 SEI
+engine.isRemoteAudioMuted(uid: "u2")    // 本机屏蔽或对端自己静音都算 true
+engine.isRemoteVideoMuted(uid: "u2")
 ```
+
+**与 Android 互通。** 静音通知走信令 `user-media`（对端 `onUserMuteAudio` / `onUserMuteVideo`），附加信息走频道消息 `sy-extra:<文本>`（UTF-8 最多 1024 字节，新成员进房会补发），SEI 走 DataChannel `SYSEI` 前缀。这些保留消息不会进 `onChannelMessage`。旧版 Android（3.1）的 JSON 信封 `stream-extra` / `client-mute` 也能解析。DataChannel 回调（`onStreamMessage` / `onSeiMessage`）在主线程。
 
 Token 失败时把错误转成 `SyRtcServiceError` 看说明：4031 凭证已停用，4032 已吊销，4033 已过期。
 

@@ -100,7 +100,7 @@ internal class SyRtcEngineImpl {
     private var remoteAudioMuted: [String: Bool] = [:]
     private var remoteAudioTracks: [String: RTCAudioTrack] = [:]
     private var streamExtraInfo = ""
-    private let streamExtraPrefix = "sy-extra:"
+    private let streamExtraPrefix = SyRtcWire.streamExtraPrefix
     private var signalingGeneration = 0
     private var reconnectAttempt = 0
     private var reconnectWork: DispatchWorkItem?
@@ -395,11 +395,15 @@ internal class SyRtcEngineImpl {
         case "channel-message":
             let fromUid = (data["uid"] as? String) ?? ""
             let msg = (data["message"] as? String) ?? ""
-            if msg.hasPrefix(streamExtraPrefix) {
-                let extra = String(msg.dropFirst(streamExtraPrefix.count))
+            switch SyRtcWire.parseChannelMessage(msg) {
+            case .streamExtra(let extra):
                 eventHandler?.onStreamExtraInfoUpdated(uid: fromUid, extraInfo: extra)
-            } else {
-                eventHandler?.onChannelMessage(uid: fromUid, message: msg)
+            case .legacyMute(let media, let muted):
+                applyRemoteMediaState(media == "audio"
+                    ? ["uid": fromUid, "audioMuted": muted]
+                    : ["uid": fromUid, "videoMuted": muted])
+            case .plain(let text):
+                eventHandler?.onChannelMessage(uid: fromUid, message: text)
             }
         case "user-media":
             applyRemoteMediaState(data)
@@ -715,6 +719,15 @@ internal class SyRtcEngineImpl {
 
     func isLocalAudioMuted() -> Bool {
         localAudioMuted
+    }
+
+    /// 本机屏蔽了该路，或对端自己静音了（`user-media`），都返回 true。
+    func isRemoteAudioMuted(uid: String) -> Bool {
+        muteAllRemoteAudio || remoteAudioMuted[uid] == true
+    }
+
+    func isRemoteVideoMuted(uid: String) -> Bool {
+        muteAllRemoteVideo || videoMutedStates[uid] == true
     }
     
     func muteRemoteAudioStream(uid: String, muted: Bool) {
@@ -1669,16 +1682,34 @@ internal class SyRtcEngineImpl {
         }
         
         func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
-            engine?.eventHandler?.onStreamMessage(uid: remoteUid, streamId: streamId, data: buffer.data)
+            let data = buffer.data
+            let uid = remoteUid
+            let sid = streamId
+            let sei = SyRtcWire.unwrapSei(data)
+            DispatchQueue.main.async { [weak engine] in
+                guard let handler = engine?.eventHandler else { return }
+                handler.onStreamMessage(uid: uid, streamId: sid, data: data)
+                if let sei { handler.onSeiMessage(uid: uid, streamId: sid, data: sei) }
+            }
         }
         
         func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {}
     }
     
     func sendStreamMessage(streamId: Int, data: Data) {
+        _ = sendOnDataChannels(streamId: streamId, data: data)
+    }
+
+    /// DataChannel 上发 `SYSEI` 前缀消息（与 Android `sendSei` 同格式）。
+    /// 返回 0 已写入打开的通道；-1 流不存在或通道未打开（与 Android 相同）。
+    func sendSei(streamId: Int, data: Data) -> Int {
+        sendOnDataChannels(streamId: streamId, data: SyRtcWire.wrapSei(data))
+    }
+
+    private func sendOnDataChannels(streamId: Int, data: Data) -> Int {
         guard dataStreamConfigs[streamId] != nil else {
             eventHandler?.onStreamMessageError(uid: currentUid ?? "", streamId: streamId, code: 2, missed: 0, cached: 0)
-            return
+            return -1
         }
         let buffer = RTCDataBuffer(data: data, isBinary: true)
         var sent = 0
@@ -1689,7 +1720,9 @@ internal class SyRtcEngineImpl {
         }
         if sent == 0 {
             eventHandler?.onStreamMessageError(uid: currentUid ?? "", streamId: streamId, code: 1, missed: 0, cached: 0)
+            return -1
         }
+        return 0
     }
     
     

@@ -31,6 +31,11 @@ let package = Package(
                 .linkedFramework("UIKit"),
             ]
         ),
+        .testTarget(
+            name: "SyRtcSDKTests",
+            dependencies: ["SyRtcSDK"],
+            path: "Tests/SyRtcSDKTests"
+        ),
         .binaryTarget(
             name: "WebRTC",
             url: "https://github.com/webrtc-sdk/Specs/releases/download/125.6422.07/WebRTC.xcframework.zip",

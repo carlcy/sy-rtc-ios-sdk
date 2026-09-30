@@ -72,6 +72,16 @@ public class SyRtcEngine {
         impl?.isLocalAudioMuted() ?? false
     }
 
+    /// 本机屏蔽了该路（`muteRemoteAudioStream` / `muteAllRemoteAudioStreams`），或对端自己静音了，都返回 true。
+    public func isRemoteAudioMuted(uid: String) -> Bool {
+        impl?.isRemoteAudioMuted(uid: uid) ?? false
+    }
+
+    /// 本机屏蔽了该路视频，或对端关了视频（`onUserMuteVideo`），都返回 true。
+    public func isRemoteVideoMuted(uid: String) -> Bool {
+        impl?.isRemoteVideoMuted(uid: uid) ?? false
+    }
+
     public func sendChannelMessage(_ message: String) {
         impl?.sendChannelMessage(message)
     }
@@ -443,6 +453,14 @@ public class SyRtcEngine {
 
     public func sendStreamMessage(streamId: Int, data: Data) {
         impl?.sendStreamMessage(streamId: streamId, data: data)
+    }
+
+    /// 经 DataChannel 发送带 `SYSEI` 前缀的二进制，对端回调 `onSeiMessage`。不是 H.264 码流 SEI。
+    ///
+    /// - Returns: 0 已写入打开的通道；-1 流不存在或通道未打开；未初始化时 -1。
+    @discardableResult
+    public func sendSei(streamId: Int, data: Data) -> Int {
+        impl?.sendSei(streamId: streamId, data: data) ?? -1
     }
 
 

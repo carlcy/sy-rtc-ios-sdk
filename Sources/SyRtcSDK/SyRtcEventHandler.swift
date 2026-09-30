@@ -36,6 +36,10 @@ public protocol SyRtcEventHandler: AnyObject {
     ///   - data: 二进制数据
     func onStreamMessage(uid: String, streamId: Int, data: Data)
 
+    /// `sendSei` 发来的消息（可选）。`data` 已去掉 `SYSEI` 前缀；同一条消息也会先以原始字节回调 `onStreamMessage`。
+    /// 这是 DataChannel 消息，不是码流 SEI，与 Android `onSeiMessage` 互通。
+    func onSeiMessage(uid: String, streamId: Int, data: Data)
+
     /// 数据流消息错误回调（可选）
     ///
     /// - Parameters:
@@ -101,6 +105,7 @@ public struct SyVolumeInfo {
 public extension SyRtcEventHandler {
     func onError(code: Int, message: String) {}
     func onStreamMessage(uid: String, streamId: Int, data: Data) {}
+    func onSeiMessage(uid: String, streamId: Int, data: Data) {}
     func onStreamMessageError(uid: String, streamId: Int, code: Int, missed: Int, cached: Int) {}
     func onChannelMessage(uid: String, message: String) {}
 }

@@ -17,6 +17,7 @@
 - `SyRoomService.setRoomAttribute` / `getRoomAttributes` / `deleteRoomAttribute`：房间属性，对应 `POST /api/rtc/channel/meta/set|get|delete`（需要用户 JWT）。
 - `SyRtcServiceError`：获取或续期 Token 时识别业务码 4031（凭证已停用）、4032（已吊销）、4033（已过期），HTTP 4xx 也会先读 JSON `code`。
 - 网络质量：`onNetworkQuality` 使用 WebRTC candidate-pair RTT 与 inbound-rtp 丢包，没有统计时为 `unknown`。`getNetworkType` 来自 `NWPathMonitor`（wifi / cellular / ethernet / none），有网本身不算 excellent。
+- 与 Android 对齐：`sendSei(streamId:data:)` 与回调 `onSeiMessage`（DataChannel `SYSEI` 前缀，有默认实现）；`isRemoteAudioMuted(uid:)` / `isRemoteVideoMuted(uid:)`；频道消息兼容旧版 Android 的 `stream-extra` / `client-mute` JSON。`onStreamMessage` 改在主线程回调。线格式单测见 `Tests/SyRtcSDKTests`（`xcodebuild test -scheme SyRtcSDK`）。
 - 设备：`switchCamera` / `useFrontCamera`，`setAudioRoute` 只在扬声器和听筒之间切换；蓝牙和有线耳机只通过 `onAudioRoutingChanged` 上报。
 - 音频设备：`enumerateRecordingDevices` 返回 `AVAudioSession.availableInputs`（uid / portName），`setRecordingDevice` 调 `setPreferredInput`，找不到或失败返回 -1。`enumeratePlaybackDevices` 只列能主动切换的 `speaker` / `earpiece`，`setPlaybackDevice` 对其他 id 返回 -1。
 - `setVideoFrameProcessor`：本地 `CVPixelBuffer` 前处理钩子。`setBeautyEffectOptions` 只记录参数，不内置美颜渲染。
