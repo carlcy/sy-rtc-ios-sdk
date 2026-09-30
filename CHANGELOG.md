@@ -8,6 +8,10 @@
 - SPM 的 WebRTC 改为与 CocoaPods 相同的 `WebRTC-SDK` 125.6422.07 xcframework（`binaryTarget`），不再依赖另一套 `stasel/WebRTC` 141。
 - 示例工程去掉本地 `:path` 依赖，改为与客户相同的版本号。
 
+### 修复
+
+- **可选回调此前不会送达**：`onJoinChannelSuccess`、`onNetworkQuality`、`onConnectionStateChanged`、`onUserMuteAudio` 等 23 个回调只写在 protocol extension 里，引擎经 `SyRtcEventHandler?` 调用时静态派发到空默认实现，实现方（含 Flutter 插件）永远收不到。现已全部声明为协议要求，默认空实现保留，已有代码无需改动。单测 `SyRtcEventHandlerDispatchTests`。
+
 ### 新增
 
 - `SyRoomService.renewToken`：`POST /api/rtc/token/renew`，鉴权与 `fetchToken` 相同。
