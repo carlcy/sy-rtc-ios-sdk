@@ -119,7 +119,8 @@ internal class SyRtcEngineImpl {
     private var nextDataStreamId = 1
     private var dataChannelsByPeer: [String: [Int: RTCDataChannel]] = [:]
     private var pendingForceOffer: Set<String> = []
-    private var firstFrameRenderers: [String: FirstFrameRenderer] = [:]
+    private var firstFrameRenderers: [String: FrameTrackingRenderer] = [:]
+    private var localFrameRenderers: [String: FrameTrackingRenderer] = [:]
     private var canPublishMedia = true
     
     // 多人语聊（Mesh）：每个远端用户一条 PeerConnection（key=remoteUid）
@@ -243,6 +244,7 @@ internal class SyRtcEngineImpl {
         pendingForceOffer.removeAll()
         dataChannelsByPeer.removeAll()
         remoteAudioTracks.removeAll()
+        for (uid, renderer) in firstFrameRenderers { remoteVideoTracks[uid]?.remove(renderer) }
         remoteVideoTracks.removeAll()
         firstFrameRenderers.removeAll()
         signalingClient?.disconnect(sendLeave: true)
@@ -407,8 +409,10 @@ internal class SyRtcEngineImpl {
                 pendingForceOffer.remove(uid)
                 dataChannelsByPeer.removeValue(forKey: uid)
                 remoteAudioTracks.removeValue(forKey: uid)
+                if let renderer = firstFrameRenderers.removeValue(forKey: uid) {
+                    remoteVideoTracks[uid]?.remove(renderer)
+                }
                 remoteVideoTracks.removeValue(forKey: uid)
-                firstFrameRenderers.removeValue(forKey: uid)
             }
         case "channel-message":
             let fromUid = (data["uid"] as? String) ?? ""
@@ -2059,6 +2063,7 @@ extension SyRtcEngineImpl {
         let track = factory.videoTrack(with: source, trackId: "video_track")
         track.isEnabled = !localVideoMuted && canPublishMedia
         localVideoTrack = track
+        attachLocalFrameRenderer(track, key: "camera")
         return track
     }
 
@@ -2070,6 +2075,7 @@ extension SyRtcEngineImpl {
         let track = factory.videoTrack(with: source, trackId: "screen_track")
         track.isEnabled = !localVideoMuted && canPublishMedia
         screenVideoTrack = track
+        attachLocalFrameRenderer(track, key: "screen")
         screenCapturer = RTCVideoCapturer(delegate: source)
         return track
     }
@@ -2111,6 +2117,10 @@ extension SyRtcEngineImpl {
         }
     }
 
+    static func rotationDegreesForSink(_ rotation: RTCVideoRotation) -> Int {
+        rotationDegrees(rotation)
+    }
+
     fileprivate static func rtcRotation(_ degrees: Int) -> RTCVideoRotation {
         switch ((degrees % 360) + 360) % 360 {
         case 90: return ._90
@@ -2129,13 +2139,14 @@ extension SyRtcEngineImpl {
                 video.add(renderer)
             }
 #endif
-            if !firstFrameRenderers.keys.contains(uid) {
-                let renderer = FirstFrameRenderer { [weak self] frame in
-                    self?.handleFirstRemoteFrame(frame, uid: uid)
-                }
-                firstFrameRenderers[uid] = renderer
-                video.add(renderer)
+            if let old = firstFrameRenderers[uid] {
+                video.remove(old)
             }
+            let renderer = FrameTrackingRenderer { [weak self] w, h, rot, change in
+                DispatchQueue.main.async { self?.handleRemoteFrame(uid: uid, width: w, height: h, rotation: rot, change: change) }
+            }
+            firstFrameRenderers[uid] = renderer
+            video.add(renderer)
             eventHandler?.onRemoteVideoStateChanged(uid: uid, state: "decoding", reason: "track", elapsed: elapsedSinceJoin())
         } else if let audio = track as? RTCAudioTrack {
             remoteAudioTracks[uid] = audio
@@ -2144,17 +2155,32 @@ extension SyRtcEngineImpl {
         }
     }
 
-    fileprivate func handleFirstRemoteFrame(_ frame: RTCVideoFrame, uid: String) {
-        guard firstFrameRenderers[uid] != nil else { return }
-        if let renderer = firstFrameRenderers.removeValue(forKey: uid) {
-            remoteVideoTracks[uid]?.remove(renderer)
-        }
-        let width = Int(frame.width)
-        let height = Int(frame.height)
+    /// 首帧回调 onFirstRemoteVideoDecoded / onFirstRemoteVideoFrame；首帧及之后宽高或旋转变化回调
+    /// onVideoSizeChanged。sink 常驻到对端离开（3.2.0 只在首帧回调一次尺寸）。与 Android 相同。
+    fileprivate func handleRemoteFrame(uid: String, width: Int, height: Int, rotation: Int, change: SyRtcVideoFrameTracker.Change) {
+        guard currentChannelId != nil, firstFrameRenderers[uid] != nil else { return }
         let elapsed = elapsedSinceJoin()
-        eventHandler?.onFirstRemoteVideoDecoded(uid: uid, width: width, height: height, elapsed: elapsed)
-        eventHandler?.onFirstRemoteVideoFrame(uid: uid, width: width, height: height, elapsed: elapsed)
-        eventHandler?.onVideoSizeChanged(uid: uid, width: width, height: height, rotation: Self.rotationDegrees(frame.rotation))
+        if change.first {
+            eventHandler?.onFirstRemoteVideoDecoded(uid: uid, width: width, height: height, elapsed: elapsed)
+            eventHandler?.onFirstRemoteVideoFrame(uid: uid, width: width, height: height, elapsed: elapsed)
+        }
+        if change.sizeChanged {
+            eventHandler?.onVideoSizeChanged(uid: uid, width: width, height: height, rotation: rotation)
+        }
+    }
+
+    /// 本地视频轨（摄像头含自定义采集 / 屏幕）新建后的第一帧回调 onFirstLocalVideoFrame。
+    fileprivate func attachLocalFrameRenderer(_ track: RTCVideoTrack, key: String) {
+        let renderer = FrameTrackingRenderer { [weak self] w, h, _, change in
+            guard change.first else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let elapsed = self.joinStartTime == nil ? 0 : self.elapsedSinceJoin()
+                self.eventHandler?.onFirstLocalVideoFrame(width: w, height: h, elapsed: elapsed)
+            }
+        }
+        localFrameRenderers[key] = renderer
+        track.add(renderer)
     }
 
     fileprivate func elapsedSinceJoin() -> Int {
@@ -2377,20 +2403,23 @@ private final class CameraFrameRelay: NSObject, RTCVideoCapturerDelegate {
     }
 }
 
-private final class FirstFrameRenderer: NSObject, RTCVideoRenderer {
-    private let onFrame: (RTCVideoFrame) -> Void
-    private var fired = false
+/// 常驻视频 sink：每帧交给 `SyRtcVideoFrameTracker`，只在首帧或尺寸变化时回调（渲染线程）。
+private final class FrameTrackingRenderer: NSObject, RTCVideoRenderer {
+    private let tracker = SyRtcVideoFrameTracker()
+    private let onChange: (Int, Int, Int, SyRtcVideoFrameTracker.Change) -> Void
 
-    init(onFrame: @escaping (RTCVideoFrame) -> Void) {
-        self.onFrame = onFrame
+    init(onChange: @escaping (Int, Int, Int, SyRtcVideoFrameTracker.Change) -> Void) {
+        self.onChange = onChange
     }
 
     func setSize(_ size: CGSize) {}
 
     func renderFrame(_ frame: RTCVideoFrame?) {
-        guard !fired, let frame else { return }
-        fired = true
-        onFrame(frame)
+        guard let frame else { return }
+        let w = Int(frame.width), h = Int(frame.height)
+        let rot = SyRtcEngineImpl.rotationDegreesForSink(frame.rotation)
+        let change = tracker.onFrame(width: w, height: h, rotation: rot)
+        if change.first || change.sizeChanged { onChange(w, h, rot, change) }
     }
 }
 

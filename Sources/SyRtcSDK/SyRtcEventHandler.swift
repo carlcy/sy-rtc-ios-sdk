@@ -84,6 +84,8 @@ public protocol SyRtcEventHandler: AnyObject {
     func onFirstRemoteVideoDecoded(uid: String, width: Int, height: Int, elapsed: Int)
     func onFirstRemoteVideoFrame(uid: String, width: Int, height: Int, elapsed: Int)
     func onVideoSizeChanged(uid: String, width: Int, height: Int, rotation: Int)
+    /// 本地视频轨（摄像头含自定义采集 / 屏幕共享）新建后的第一帧。elapsed 为距 join 的毫秒，join 前为 0。与 Android 相同。
+    func onFirstLocalVideoFrame(width: Int, height: Int, elapsed: Int)
     func onAudioRoutingChanged(routing: Int)
     func onUserMuteVideo(uid: String, muted: Bool)
     func onStreamExtraInfoUpdated(uid: String, extraInfo: String)
@@ -116,6 +118,7 @@ public extension SyRtcEventHandler {
     func onFirstRemoteVideoDecoded(uid: String, width: Int, height: Int, elapsed: Int) {}
     func onFirstRemoteVideoFrame(uid: String, width: Int, height: Int, elapsed: Int) {}
     func onVideoSizeChanged(uid: String, width: Int, height: Int, rotation: Int) {}
+    func onFirstLocalVideoFrame(width: Int, height: Int, elapsed: Int) {}
     func onAudioRoutingChanged(routing: Int) {}
     func onUserMuteVideo(uid: String, muted: Bool) {}
     func onStreamExtraInfoUpdated(uid: String, extraInfo: String) {}

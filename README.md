@@ -267,6 +267,10 @@ if let serviceError = error as? SyRtcServiceError {
 
 应用内屏幕共享失败（常见于模拟器）会回调 `onError`，不会把状态标成正在共享。系统广播扩展见 [BroadcastExtension/README.md](BroadcastExtension/README.md)，扩展进程里的帧到不了引擎。
 
+## 首帧与分辨率
+
+远端视频轨到达后挂一个常驻 sink：第一帧回调 `onFirstRemoteVideoDecoded` 和 `onFirstRemoteVideoFrame`（elapsed 为距 join 的毫秒），第一帧及之后宽、高或旋转变化时回调 `onVideoSizeChanged`（宽高为缓冲区尺寸，rotation 0/90/180/270），都在主线程。本地摄像头（含自定义采集）或屏幕共享视频轨新建后的第一帧回调 `onFirstLocalVideoFrame`。Android 相同。
+
 ## 错误码
 
 `onError(code:message:)` 的取值三端（iOS `SyRtcErrorCode`、Android `RtcErrorCode`、Flutter `SyRtcErrorCode`）相同：
