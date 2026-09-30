@@ -104,6 +104,12 @@ internal class SyRtcEngineImpl {
     private var signalingGeneration = 0
     private var reconnectAttempt = 0
     private var reconnectWork: DispatchWorkItem?
+    /// ICE 断开、正在恢复的对端。与信令共用 `reconnectAttempt`。
+    private var iceLostPeers = Set<String>()
+    private var iceRecoveryPending = false
+    private var iceRetryWork: DispatchWorkItem?
+    /// 最近一次掉线来自信令（用于 `onReconnected(reason:)`）。
+    private var reconnectWorkWasSignaling = false
     private var qualityTimer: Timer?
     private var volumeIntervalMs = 0
     private var volumeSmooth = 3
@@ -207,6 +213,7 @@ internal class SyRtcEngineImpl {
         connectionState = "connecting"
         eventHandler?.onConnectionStateChanged(state: "connecting", reason: "joining")
         reconnectAttempt = 0
+        resetIceRecovery()
         openSignaling(channelId: channelId, uid: uid, token: token)
         startQualityMonitor()
 
@@ -224,6 +231,7 @@ internal class SyRtcEngineImpl {
         reconnectWork?.cancel()
         reconnectWork = nil
         reconnectAttempt = 0
+        resetIceRecovery()
         stopQualityMonitor()
 
         peerConnections.values.forEach { $0.close() }
@@ -313,6 +321,10 @@ internal class SyRtcEngineImpl {
                 let elapsed = Int((Date().timeIntervalSince(joinStartTime ?? Date())) * 1000)
                 eventHandler?.onRejoinChannelSuccess(channelId: chId, uid: localUid, elapsed: max(0, elapsed))
                 eventHandler?.onConnectionStateChanged(state: "connected", reason: "rejoin_success")
+                if reconnectWorkWasSignaling {
+                    reconnectWorkWasSignaling = false
+                    eventHandler?.onReconnected(reason: "signaling")
+                }
             }
             for u in users where u != localUid {
                 let known = peerConnections[u] != nil
@@ -381,6 +393,11 @@ internal class SyRtcEngineImpl {
         case "user-left":
             if let uid = data["uid"] as? String {
                 eventHandler?.onUserOffline(uid: uid, reason: "quit")
+                if iceLostPeers.remove(uid) != nil, iceLostPeers.isEmpty, iceRecoveryPending {
+                    // 断开的对端已离开，不再为它重连。
+                    resetIceRecovery()
+                    reconnectAttempt = 0
+                }
                 peerConnections.removeValue(forKey: uid)?.close()
                 offerSentByUid.remove(uid)
                 remoteSdpSetByUid.remove(uid)
@@ -1731,6 +1748,7 @@ internal class SyRtcEngineImpl {
     func release() {
         signalingGeneration += 1
         reconnectWork?.cancel()
+        resetIceRecovery()
         stopQualityMonitor()
         volumeIndicationTimer?.invalidate()
         volumeIndicationTimer = nil
@@ -1829,16 +1847,21 @@ extension SyRtcEngineImpl {
     fileprivate func handleSignalingFailure() {
         guard currentChannelId != nil else { return }
         reconnectWork?.cancel()
-        if reconnectAttempt >= 5 {
+        reconnectAttempt += 1
+        if reconnectAttempt > SyRtcReconnectPolicy.maxAttempts {
             connectionState = "failed"
-            eventHandler?.onConnectionStateChanged(state: "failed", reason: "signaling_give_up")
-            eventHandler?.onError(code: 1005, message: "信令重连失败")
+            reconnectWorkWasSignaling = false
+            eventHandler?.onConnectionStateChanged(state: "failed", reason: "signaling")
+            eventHandler?.onReconnectFailed(reason: "signaling")
+            eventHandler?.onError(code: 1003, message: "信令重连失败")
             return
         }
-        let delay = pow(2.0, Double(reconnectAttempt))
-        reconnectAttempt += 1
+        let delayMs = SyRtcReconnectPolicy.delayMs(attempt: reconnectAttempt)
+        let delay = Double(delayMs) / 1000
         connectionState = "reconnecting"
+        reconnectWorkWasSignaling = true
         eventHandler?.onConnectionStateChanged(state: "reconnecting", reason: "signaling")
+        eventHandler?.onReconnecting(reason: "signaling", attempt: reconnectAttempt, maxAttempts: SyRtcReconnectPolicy.maxAttempts, delayMs: delayMs)
         let work = DispatchWorkItem { [weak self] in
             guard let self, let channelId = self.currentChannelId, let uid = self.currentUid, let token = self.currentToken else { return }
             self.pendingRejoin = self.hasFiredJoinSuccess
@@ -1870,47 +1893,88 @@ extension SyRtcEngineImpl {
         }
     }
 
+    /// 各对端 ICE 状态只驱动重连逻辑，不再逐条转成 `onConnectionStateChanged`（与 Android 一致）。
     fileprivate func handleIceState(_ state: RTCIceConnectionState, remoteUid: String) {
-        let name: String
-        let reason: String
-        switch state {
-        case .new, .checking:
-            name = "connecting"
-            reason = "ice_checking"
-        case .connected, .completed:
-            name = "connected"
-            reason = "ice_connected"
-        case .disconnected:
-            name = "reconnecting"
-            reason = "ice_disconnected"
-        case .failed:
-            name = "failed"
-            reason = "ice_failed"
-        case .closed:
-            name = "disconnected"
-            reason = "ice_closed"
-        case .count:
-            return
-        @unknown default:
-            name = "connecting"
-            reason = "ice"
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            switch state {
+            case .disconnected, .failed:
+                self.handleIceLost(remoteUid)
+            case .connected, .completed:
+                self.handleIceRecovered(remoteUid)
+            default:
+                break
+            }
         }
-        connectionState = name
-        eventHandler?.onConnectionStateChanged(state: name, reason: "\(reason):\(remoteUid)")
     }
 
-    fileprivate func handlePeerConnectionState(_ state: RTCPeerConnectionState, remoteUid: String) {
-        let name: String
-        switch state {
-        case .new, .connecting: name = "connecting"
-        case .connected: name = "connected"
-        case .disconnected: name = "reconnecting"
-        case .failed: name = "failed"
-        case .closed: name = "disconnected"
-        @unknown default: name = "connecting"
+    /// PeerConnection 聚合状态与 ICE 状态重复，只用 ICE 状态驱动重连。
+    fileprivate func handlePeerConnectionState(_ state: RTCPeerConnectionState, remoteUid: String) {}
+
+    private func resetIceRecovery() {
+        iceRetryWork?.cancel()
+        iceRetryWork = nil
+        iceLostPeers.removeAll()
+        iceRecoveryPending = false
+    }
+
+    /// 某个对端 ICE 断开：计一次重连（与信令共用次数），按 `SyRtcReconnectPolicy` 等待后若仍未恢复再计下一次。
+    fileprivate func handleIceLost(_ remoteUid: String) {
+        guard currentChannelId != nil, hasFiredJoinSuccess, peerConnections[remoteUid] != nil else { return }
+        iceLostPeers.insert(remoteUid)
+        if iceRecoveryPending {
+            restartIce(for: remoteUid)
+            return
         }
-        connectionState = name
-        eventHandler?.onConnectionStateChanged(state: name, reason: "pc_\(name):\(remoteUid)")
+        iceRecoveryPending = true
+        reconnectAttempt += 1
+        if reconnectAttempt > SyRtcReconnectPolicy.maxAttempts {
+            resetIceRecovery()
+            connectionState = "failed"
+            eventHandler?.onConnectionStateChanged(state: "failed", reason: "ice")
+            eventHandler?.onReconnectFailed(reason: "ice")
+            eventHandler?.onError(code: 1003, message: "媒体连接重连失败")
+            return
+        }
+        let delayMs = SyRtcReconnectPolicy.delayMs(attempt: reconnectAttempt)
+        connectionState = "reconnecting"
+        eventHandler?.onConnectionStateChanged(state: "reconnecting", reason: "ice")
+        eventHandler?.onReconnecting(reason: "ice", attempt: reconnectAttempt, maxAttempts: SyRtcReconnectPolicy.maxAttempts, delayMs: delayMs)
+        iceLostPeers.forEach { restartIce(for: $0) }
+        iceRetryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.iceRecoveryPending, self.currentChannelId != nil else { return }
+            self.iceRetryWork = nil
+            self.iceLostPeers = self.iceLostPeers.filter { self.peerConnections[$0] != nil }
+            self.iceRecoveryPending = false
+            guard let next = self.iceLostPeers.first else { return }
+            self.handleIceLost(next)
+        }
+        iceRetryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(delayMs) / 1000, execute: work)
+    }
+
+    /// 字典序较小的一方 restartIce 并重发 offer（与首次 offer 的发起方相同，避免 glare）。
+    private func restartIce(for remoteUid: String) {
+        guard let pc = peerConnections[remoteUid], let localUid = currentUid else { return }
+        pc.restartIce()
+        if shouldInitiateOffer(localUid: localUid, remoteUid: remoteUid) {
+            forceOffer(to: remoteUid)
+        }
+    }
+
+    fileprivate func handleIceRecovered(_ remoteUid: String) {
+        iceLostPeers.remove(remoteUid)
+        guard iceLostPeers.isEmpty, iceRecoveryPending else { return }
+        iceRetryWork?.cancel()
+        iceRetryWork = nil
+        iceRecoveryPending = false
+        reconnectAttempt = 0
+        connectionState = "connected"
+        let elapsed = Int((Date().timeIntervalSince(joinStartTime ?? Date())) * 1000)
+        eventHandler?.onRejoinChannelSuccess(channelId: currentChannelId ?? "", uid: currentUid ?? "", elapsed: max(0, elapsed))
+        eventHandler?.onConnectionStateChanged(state: "connected", reason: "rejoin_success")
+        eventHandler?.onReconnected(reason: "ice")
     }
 
     fileprivate func receiveConstraints() -> RTCMediaConstraints {

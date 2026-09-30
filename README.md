@@ -231,6 +231,18 @@ engine.isRemoteAudioMuted(uid: "u2")    // 本机屏蔽或对端自己静音都�
 engine.isRemoteVideoMuted(uid: "u2")
 ```
 
+**断线重连。** 与 Android 相同（`SyRtcReconnectPolicy`）：信令或 ICE 断开后最多重试 5 次，第 n 次等待 2^(n-1) 秒（1、2、4、8、16 秒）。ICE 断开时 uid 字典序较小的一方 `restartIce` 并重发 offer。
+
+| 时机 | `onConnectionStateChanged(state:reason:)` | 专用回调 |
+|---|---|---|
+| join | `connecting` / `joining` → `connected` / `join_success` | `onJoinChannelSuccess` |
+| 断开，开始重试 | `reconnecting` / `signaling` 或 `ice` | `onReconnecting(reason:attempt:maxAttempts:delayMs:)` |
+| 恢复 | `connected` / `rejoin_success` | `onRejoinChannelSuccess`、`onReconnected(reason:)` |
+| 5 次都失败 | `failed` / `signaling` 或 `ice` | `onReconnectFailed(reason:)`、`onError(1003)` |
+| leave | `disconnecting` / `leaving` → `disconnected` / `leave` | `onLeaveChannel` |
+
+此前 iOS 把每个对端的 ICE / PeerConnection 原始状态直接转成 `onConnectionStateChanged`（reason 如 `ice_connected:u2`），没有 ICE 重启，信令放弃时 reason 为 `signaling_give_up`、错误码 1005。
+
 **网络质量。** `onNetworkQuality` 的档位由 `SyRtcNetworkQuality.level` 计算。RTT 和丢包各自落档，取较差的一档；没有样本时为 `unknown`。阈值参考即构 Express 的分级，Android 与 iOS 完全相同（两端各有同一张表的单测）。 `onRtcStats` 同时给 `packetLossRate`（0–1）和 `lossPercent`（0–100）。
 
 | 档位 | RTT (ms) | 丢包 |

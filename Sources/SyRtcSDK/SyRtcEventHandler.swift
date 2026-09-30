@@ -68,6 +68,12 @@ public protocol SyRtcEventHandler: AnyObject {
     func onServerMuteAudio(uid: String, muted: Bool)
     func onUserMuteAudio(uid: String, muted: Bool)
     func onConnectionStateChanged(state: String, reason: String)
+    /// 开始第 `attempt` 次重连（共 `maxAttempts` 次），`delayMs` 后执行。`reason` 为 `signaling` 或 `ice`。见 `SyRtcReconnectPolicy`。
+    func onReconnecting(reason: String, attempt: Int, maxAttempts: Int, delayMs: Int)
+    /// 重连成功（同时回调 `onRejoinChannelSuccess`）。
+    func onReconnected(reason: String)
+    /// 重连次数用完，之后回调 `onError(1003)`。需要 leave 后重新 join。
+    func onReconnectFailed(reason: String)
     func onNetworkQuality(uid: String, txQuality: String, rxQuality: String)
     func onTokenPrivilegeWillExpire()
     func onRequestToken()
@@ -97,6 +103,9 @@ public extension SyRtcEventHandler {
     func onServerMuteAudio(uid: String, muted: Bool) {}
     func onUserMuteAudio(uid: String, muted: Bool) {}
     func onConnectionStateChanged(state: String, reason: String) {}
+    func onReconnecting(reason: String, attempt: Int, maxAttempts: Int, delayMs: Int) {}
+    func onReconnected(reason: String) {}
+    func onReconnectFailed(reason: String) {}
     func onNetworkQuality(uid: String, txQuality: String, rxQuality: String) {}
     func onTokenPrivilegeWillExpire() {}
     func onRequestToken() {}

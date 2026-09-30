@@ -21,6 +21,7 @@
 - `SyRoomService.setRoomAttribute` / `getRoomAttributes` / `deleteRoomAttribute`：房间属性，对应 `POST /api/rtc/channel/meta/set|get|delete`（需要用户 JWT）。
 - `SyRtcServiceError`：获取或续期 Token 时识别业务码 4031（凭证已停用）、4032（已吊销）、4033（已过期），HTTP 4xx 也会先读 JSON `code`。
 - 网络质量：`onNetworkQuality` 使用 WebRTC candidate-pair RTT 与 inbound-rtp 丢包，没有统计时为 `unknown`。`getNetworkType` 来自 `NWPathMonitor`（wifi / cellular / ethernet / none），有网本身不算 excellent。
+- 重连策略与 Android 统一：信令和 ICE 共用最多 5 次、间隔 1/2/4/8/16 秒；ICE 断开时 offer 发起方 `restartIce` 并重发 offer。新增 `onReconnecting` / `onReconnected` / `onReconnectFailed` 与 `SyRtcReconnectPolicy`。不再把各对端 ICE 原始状态转成 `onConnectionStateChanged`；放弃重连的 reason 由 `signaling_give_up` 改为 `signaling`，错误码由 1005 改为 1003（与 Android 相同）。
 - 网络质量阈值与 Android 统一（参考即构）：excellent <100ms/<1%，good <200ms/<3%，poor <400ms/<8%，bad <800ms/<20%，其余 down（此前 down 需丢包 ≥50% 或 RTT ≥2000ms）。新增 `SyRtcNetworkQuality.rank`。
 - 与 Android 对齐：`sendSei(streamId:data:)` 与回调 `onSeiMessage`（DataChannel `SYSEI` 前缀，有默认实现）；`isRemoteAudioMuted(uid:)` / `isRemoteVideoMuted(uid:)`；频道消息兼容旧版 Android 的 `stream-extra` / `client-mute` JSON。`onStreamMessage` 改在主线程回调。线格式单测见 `Tests/SyRtcSDKTests`（`xcodebuild test -scheme SyRtcSDK`）。
 - 设备：`switchCamera` / `useFrontCamera`，`setAudioRoute` 只在扬声器和听筒之间切换；蓝牙和有线耳机只通过 `onAudioRoutingChanged` 上报。
