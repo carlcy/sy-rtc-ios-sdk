@@ -7,15 +7,15 @@
 `Podfile`：
 
 ```ruby
-pod 'SyRtcSDK', '~> 3.2.1'
+pod 'SyRtcSDK', '~> 3.2.2'
 ```
 
-这一行在 [CocoaPods Trunk](https://cocoapods.org) 已有 3.2.1 之后可以直接安装。维护者发布步骤见仓库根目录 [PUBLISH_GUIDE.md](../PUBLISH_GUIDE.md)。
+这一行在 [CocoaPods Trunk](https://cocoapods.org) 已有 3.2.2 之后可以直接安装。维护者发布步骤见仓库根目录 [PUBLISH_GUIDE.md](../PUBLISH_GUIDE.md)。
 
-SyRtcSDK 3.2.1 已在 Trunk。本机 CDN 缓存未更新（`pod repo update` 仍找不到）时，可临时把 Podfile 改成：
+SyRtcSDK 3.2.2 已在 Trunk。本机 CDN 缓存未更新（`pod repo update` 仍找不到）时，可临时把 Podfile 改成：
 
 ```ruby
-pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.1'
+pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.2'
 ```
 
 ## 运行

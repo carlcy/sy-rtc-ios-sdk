@@ -2,7 +2,7 @@
 
 SY RTC iOS SDK 提供实时音视频通信。本仓库以 **Swift 源码** 分发，客户用版本号集成，不需要下载或解压 framework / zip。
 
-当前版本：**3.2.1**（git tag `v3.2.1`）。最低系统 iOS 13.0，Swift 5.9，Xcode 15+。
+当前版本：**3.2.2**（git tag `v3.2.2`）。最低系统 iOS 13.0，Swift 5.9，Xcode 15+。
 
 ## 集成 SDK
 
@@ -19,7 +19,7 @@ platform :ios, '13.0'
 use_frameworks!
 
 target 'YourApp' do
-  pod 'SyRtcSDK', '~> 3.2.1'
+  pod 'SyRtcSDK', '~> 3.2.2'
 end
 ```
 
@@ -31,10 +31,10 @@ pod install
 
 之后用 `.xcworkspace` 打开工程。
 
-`SyRtcSDK` 已发布到 CocoaPods Trunk（3.2.0、3.2.1），`pod 'SyRtcSDK', '~> 3.2.1'` 直接可用。本机 CDN 缓存还没更新时可先 `pod repo update`，或临时用同一个版本 tag：
+`SyRtcSDK` 已发布到 CocoaPods Trunk（3.2.0、3.2.1、3.2.2；3.2.0 有数据流 / SEI 接收缺陷，勿用），`pod 'SyRtcSDK', '~> 3.2.2'` 直接可用。本机 CDN 缓存还没更新时可先 `pod repo update`，或临时用同一个版本 tag：
 
 ```ruby
-pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.1'
+pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.2'
 ```
 
 ### Swift Package Manager
@@ -45,13 +45,13 @@ Xcode：**File → Add Package Dependencies…**，地址填：
 https://github.com/carlcy/sy-rtc-ios-sdk.git
 ```
 
-Dependency Rule 选 **Up to Next Major Version**，版本填 `3.2.1`。把产品 `SyRtcSDK` 加到 App target。
+Dependency Rule 选 **Up to Next Major Version**，版本填 `3.2.2`。把产品 `SyRtcSDK` 加到 App target。
 
 如果业务工程本身是 Swift Package，在 `Package.swift` 里写：
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/carlcy/sy-rtc-ios-sdk.git", from: "3.2.1")
+    .package(url: "https://github.com/carlcy/sy-rtc-ios-sdk.git", from: "3.2.2")
 ],
 targets: [
     .target(
@@ -63,7 +63,7 @@ targets: [
 ]
 ```
 
-版本来自 git tag `v3.2.1`，不需要单独上传二进制包。
+版本来自 git tag `v3.2.2`，不需要单独上传二进制包。
 
 ## 快速开始
 
@@ -263,7 +263,7 @@ if let serviceError = error as? SyRtcServiceError {
 }
 ```
 
-运行时版本号：`SyRtcSDKVersion.current` 为 `3.2.1`，与 podspec、`VERSION` 和 Android `RtcEngine.VERSION` 一致。
+运行时版本号：`SyRtcSDKVersion.current` 为 `3.2.2`，与 podspec、`VERSION` 和 Android `RtcEngine.VERSION` 一致。
 
 应用内屏幕共享失败（常见于模拟器）会回调 `onError`，不会把状态标成正在共享。系统广播扩展见 [BroadcastExtension/README.md](BroadcastExtension/README.md)，扩展进程里的帧到不了引擎。
 
@@ -304,7 +304,7 @@ if let serviceError = error as? SyRtcServiceError {
 
 ## 示例工程
 
-`example/` 与客户使用同一行依赖：`pod 'SyRtcSDK', '~> 3.2.1'`。步骤见 [example/README.md](example/README.md)。
+`example/` 与客户使用同一行依赖：`pod 'SyRtcSDK', '~> 3.2.2'`。步骤见 [example/README.md](example/README.md)。
 
 ## 发布新版本
 

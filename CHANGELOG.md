@@ -1,11 +1,17 @@
 # SY RTC iOS SDK 更新日志
 
+## 3.2.2
+
+- 版本对齐发布：Android、iOS、Flutter 统一为 3.2.2。iOS 代码与 3.2.1 相同，仅 `SyRtcSDKVersion.current` / podspec / `VERSION` 改为 3.2.2。
+
 ## 3.2.1
 
 - 修复：数据流 / SEI 收不到。`RTCDataChannel.delegate` 是 weak，此前代理创建后立刻释放，iOS 从不回调 `onStreamMessage` / `onSeiMessage`。现在由引擎持有代理，离开频道或对端离开时释放。
 - 首次发布到 CocoaPods Trunk。
 
 ## 3.2.0
+
+> **已知缺陷，请勿使用 3.2.0（CocoaPods Trunk / tag v3.2.0）：** 数据流 / SEI 收不到（`RTCDataChannel.delegate` 为 weak，代理创建后立即释放）。3.2.1 起修复，请升级到 3.2.2。CocoaPods 不支持按版本 deprecate，因此只在这里说明。
 
 - 网络质量上下行分开（与 Android 相同）：tx = RTT + 上行丢包（remote-inbound-rtp），rx = 本周期下行丢包 + 抖动；新增 `SyRtcLinkQuality` / `SyRtcStatsSample`。修复：下行丢包此前只取最后一路 inbound-rtp、且为通话累计值。
 - Token 过期提醒去重：本地定时器与服务端推送（`token-privilege-will-expire` / `token-expired`）每个 Token 只回调一次；按 `data.expireAt` 忽略旧 Token 的迟到推送。新增 `SyRtcTokenExpiryDedupe`。与 Android 相同。

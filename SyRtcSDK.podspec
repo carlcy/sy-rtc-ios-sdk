@@ -1,10 +1,10 @@
 Pod::Spec.new do |s|
   s.name             = 'SyRtcSDK'
-  s.version          = '3.2.1'
+  s.version          = '3.2.2'
   s.summary          = 'SY RTC iOS SDK for real-time audio and video.'
   s.description      = <<-DESC
 SY RTC iOS SDK is the source distribution of the SY real-time audio and video engine.
-Integrate it with CocoaPods by version (`pod 'SyRtcSDK', '~> 3.2.1'`) or with Swift Package Manager by git URL and version tag.
+Integrate it with CocoaPods by version (`pod 'SyRtcSDK', '~> 3.2.2'`) or with Swift Package Manager by git URL and version tag.
 The pod ships Swift sources and depends on WebRTC-SDK; customers do not download or unzip an SDK framework.
                        DESC
   s.homepage         = 'https://github.com/carlcy/sy-rtc-ios-sdk'
