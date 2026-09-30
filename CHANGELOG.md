@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- `onNetworkQuality` 与 Android 统一（本端 uid = 对端最差一档，再逐个对端，按 uid 排序），新增 `SyRtcNetworkQuality.worst`；`onRtcStats` 改为每个对端一条（此前只发第一个对端）。
 - 新增 `SyRtcErrorCode`，与 Android / Flutter 取值统一（见 README「错误码」）。**码值有变化**：音频路由 1004 → 1009，未知画质档位 1003 → 1000，附加信息过长 1006 → 1000，屏幕共享 1008 → 1006，视频源未就绪 -1001 → 1005（自定义采集为 1007）。被踢现在回调 `onError(1004)`；凭证停用时为 4031 / 4032 / 4033。
 - 修复：Token 过期提醒只按三段式 JWT 的 `exp` 解析，服务端签发的 `payload.签名` Token 从不回调 `onTokenPrivilegeWillExpire`。现在读 `expireAt`（兼容 `exp`），见 `SyRtcTokenExpiry`。
 - 修复：信令错误的文本取自 `data.message`（服务端实际字段），此前一直显示「信令错误」。

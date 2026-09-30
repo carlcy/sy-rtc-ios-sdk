@@ -29,3 +29,13 @@ final class SyRtcNetworkQualityTests: XCTestCase {
         XCTAssertEqual(["unknown", "excellent", "good", "poor", "bad", "down"].map(SyRtcNetworkQuality.rank), [0, 1, 2, 3, 4, 5])
     }
 }
+
+final class SyRtcNetworkQualityWorstTests: XCTestCase {
+    /// 与 Android ClientSignalsTest.localQualityIsWorstKnownRemote 相同。
+    func testLocalQualityIsWorstKnownRemote() {
+        XCTAssertEqual(SyRtcNetworkQuality.worst([]), "unknown")
+        XCTAssertEqual(SyRtcNetworkQuality.worst(["unknown", "unknown"]), "unknown")
+        XCTAssertEqual(SyRtcNetworkQuality.worst(["unknown", "good", "excellent"]), "good")
+        XCTAssertEqual(SyRtcNetworkQuality.worst(["poor", "down", "bad"]), "down")
+    }
+}

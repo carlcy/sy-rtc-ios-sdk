@@ -2255,12 +2255,14 @@ extension SyRtcEngineImpl {
         group.notify(queue: .main) { [weak self] in
             guard let self, self.currentChannelId != nil else { return }
             if reportQuality {
-                let worst = rows.map(\.quality).max(by: { Self.qualityRank($0) < Self.qualityRank($1) }) ?? "unknown"
+                let worst = SyRtcNetworkQuality.worst(rows.map(\.quality))
                 self.eventHandler?.onNetworkQuality(uid: localUid, txQuality: worst, rxQuality: worst)
-                for row in rows {
+                let sorted = rows.sorted { $0.uid < $1.uid }
+                for row in sorted {
                     self.eventHandler?.onNetworkQuality(uid: row.uid, txQuality: row.quality, rxQuality: row.quality)
                 }
-                if let sample = rows.first {
+                // 每个对端一条 onRtcStats（与 Android 相同）。
+                for sample in sorted {
                     var stats: [String: Any] = [
                         "networkType": self.networkType,
                         "uid": sample.uid,

@@ -37,6 +37,14 @@ public enum SyRtcNetworkQuality {
         return "excellent"
     }
 
+    /// 本端质量 = 所有对端链路中最差的一档（unknown 不参与，全部 unknown 时为 unknown）。
+    /// 与 Android `NetworkQualityEstimator.worst` 相同。
+    public static func worst<S: Sequence>(_ qualities: S) -> String where S.Element == String {
+        let best = qualities.max(by: { rank($0) < rank($1) })
+        guard let q = best, rank(q) > 0 else { return "unknown" }
+        return q
+    }
+
     /// 0 unknown，1 excellent … 5 down。与 Android `NetworkQualityEstimator.toRank` 相同。
     public static func rank(_ quality: String) -> Int {
         switch quality {

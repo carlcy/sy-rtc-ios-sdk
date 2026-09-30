@@ -243,7 +243,7 @@ engine.isRemoteVideoMuted(uid: "u2")
 
 此前 iOS 把每个对端的 ICE / PeerConnection 原始状态直接转成 `onConnectionStateChanged`（reason 如 `ice_connected:u2`），没有 ICE 重启，信令放弃时 reason 为 `signaling_give_up`、错误码 1005。
 
-**网络质量。** `onNetworkQuality` 的档位由 `SyRtcNetworkQuality.level` 计算。RTT 和丢包各自落档，取较差的一档；没有样本时为 `unknown`。阈值参考即构 Express 的分级，Android 与 iOS 完全相同（两端各有同一张表的单测）。 `onRtcStats` 同时给 `packetLossRate`（0–1）和 `lossPercent`（0–100）。
+**网络质量。** `onNetworkQuality` 的档位由 `SyRtcNetworkQuality.level` 计算。RTT 和丢包各自落档，取较差的一档；没有样本时为 `unknown`。阈值参考即构 Express 的分级，Android 与 iOS 完全相同（两端各有同一张表的单测）。 `onRtcStats` 同时给 `packetLossRate`（0–1）和 `lossPercent`（0–100）。每 2 秒一轮：先 `onNetworkQuality(本端 uid)`，质量为所有对端链路最差的一档（`SyRtcNetworkQuality.worst`，unknown 不计入），再逐个对端（按 uid 排序）；没有对端时只回调本端 `unknown`。Android 相同。`onRtcStats` 每个对端一条（此前 iOS 只发第一个对端）。
 
 | 档位 | RTT (ms) | 丢包 |
 |---|---|---|
