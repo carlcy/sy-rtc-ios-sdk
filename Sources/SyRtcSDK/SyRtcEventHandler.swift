@@ -24,7 +24,7 @@ public protocol SyRtcEventHandler: AnyObject {
     /// 错误回调（可选）
     ///
     /// - Parameters:
-    ///   - code: 错误码（自定义）
+    ///   - code: 错误码，取值见 `SyRtcErrorCode`（三端一致）
     ///   - message: 错误信息
     func onError(code: Int, message: String)
 

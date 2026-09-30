@@ -151,7 +151,7 @@ engine.setClientRole(.host)     // 或 .audience / .publisher / .subscriber
 
 ## 续期 Token
 
-Token 快过期时 SDK 会回调 `onTokenPrivilegeWillExpire`（JWT 且带 `exp` 时，提前 30 秒）。已经过期时回调 `onRequestToken`。收到后向控制面续期，再交给引擎，不要先 `leave`：
+Token 快过期时 SDK 会回调 `onTokenPrivilegeWillExpire`（提前 30 秒），到期回调 `onRequestToken`。过期时间取自 Token payload 的 `expireAt`（服务端 Token 形如 `base64url(payload).签名`；也兼容 JWT 的 `exp`），`join` 和 `renewToken` 后重新计时，Android 行为相同。3.2.0 及之前只按三段式 JWT 解析，服务端签发的两段式 Token 实际从不提醒。收到后向控制面续期，再交给引擎，不要先 `leave`：
 
 ```swift
 func onTokenPrivilegeWillExpire() {
@@ -266,6 +266,27 @@ if let serviceError = error as? SyRtcServiceError {
 运行时版本号：`SyRtcSDKVersion.current` 为 `3.2.0`，与 podspec、`VERSION` 和 Android `RtcEngine.VERSION` 一致。
 
 应用内屏幕共享失败（常见于模拟器）会回调 `onError`，不会把状态标成正在共享。系统广播扩展见 [BroadcastExtension/README.md](BroadcastExtension/README.md)，扩展进程里的帧到不了引擎。
+
+## 错误码
+
+`onError(code:message:)` 的取值三端（iOS `SyRtcErrorCode`、Android `RtcErrorCode`、Flutter `SyRtcErrorCode`）相同：
+
+| code | 常量 | 含义 |
+|---|---|---|
+| 1000 | `invalidArgument` | 参数无效或调用时机不对（空 Token、未知画质档位、附加信息超过 1024 字节） |
+| 1002 | `signaling` | 信令服务端返回的错误，message 为服务端原文 |
+| 1003 | `reconnectFailed` | 重连 5 次都失败，需要 leave 后重新 join |
+| 1004 | `kicked` | 被房间管理踢出（同时回调 `onKicked`） |
+| 1005 | `camera` | 摄像头不可用或视频源未就绪 |
+| 1006 | `screenShare` | 屏幕共享失败 |
+| 1007 | `customCapture` | 自定义采集用法错误或视频源未就绪 |
+| 1009 | `audioRoute` | 音频路由不支持（iOS 只能在扬声器和听筒之间切换）或设置失败 |
+| 403 | `forbidden` | 服务端拒绝入房：在踢出名单、房间锁定、不在白名单 |
+| 4031 / 4032 / 4033 | `credentialSuspended` / `Revoked` / `Expired` | AppId 访问凭证被暂停 / 吊销 / 过期；服务端断开信令，SDK 回调 `onKicked` 后以此码回调 `onError` |
+
+403 和 4031–4033 与控制面 REST 业务码相同，取自信令 `kicked` / `error` 帧的 `data.code`（需要 2026-09-30 之后的 rtc-backend-go）。
+
+与 3.2.0 相比有变化的码：音频路由 1004 → 1009，未知画质档位 1003 → 1000，附加信息过长 1006 → 1000，屏幕共享 1008 → 1006，视频源未就绪 -1001 → 1005 / 1007，被踢由不报错改为 1004。
 
 ## 示例工程
 

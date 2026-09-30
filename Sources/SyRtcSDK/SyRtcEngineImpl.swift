@@ -195,7 +195,7 @@ internal class SyRtcEngineImpl {
         guard !channelId.trimmingCharacters(in: .whitespaces).isEmpty,
               !uid.trimmingCharacters(in: .whitespaces).isEmpty,
               !token.trimmingCharacters(in: .whitespaces).isEmpty else {
-            eventHandler?.onError(code: 1000, message: "channelId/uid/token 不能为空")
+            eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "channelId/uid/token 不能为空")
             return
         }
         currentChannelId = channelId
@@ -288,6 +288,7 @@ internal class SyRtcEngineImpl {
         case "kicked":
             let reason = (data["reason"] as? String) ?? "kicked"
             eventHandler?.onKicked(channelId: channelId, reason: reason)
+            eventHandler?.onError(code: SyRtcErrorCode.forKicked(data), message: "kicked: \(reason)")
             leave()
         case "user-kicked":
             if let kickedUid = data["uid"] as? String {
@@ -429,8 +430,8 @@ internal class SyRtcEngineImpl {
         case "token-expired", "request-token":
             eventHandler?.onRequestToken()
         case "error":
-            let msg = (data["error"] as? String) ?? "信令错误"
-            eventHandler?.onError(code: 1002, message: msg)
+            eventHandler?.onError(code: SyRtcErrorCode.forSignalingError(data),
+                                  message: SyRtcErrorCode.signalingErrorMessage(data))
         default:
             break
         }
@@ -590,7 +591,7 @@ internal class SyRtcEngineImpl {
             publishCurrentAudioRoute()
         } catch {
             print("设置扬声器失败: \(error)")
-            eventHandler?.onError(code: 1004, message: "设置扬声器失败")
+            eventHandler?.onError(code: SyRtcErrorCode.audioRoute, message: "设置扬声器失败")
         }
     }
 
@@ -601,7 +602,7 @@ internal class SyRtcEngineImpl {
         case .earpiece:
             setEnableSpeakerphone(false)
         case .headset, .bluetooth, .unknown:
-            eventHandler?.onError(code: 1004, message: "iOS 只能在扬声器和听筒之间切换，蓝牙和有线耳机由系统路由决定")
+            eventHandler?.onError(code: SyRtcErrorCode.audioRoute, message: "iOS 只能在扬声器和听筒之间切换，蓝牙和有线耳机由系统路由决定")
             publishCurrentAudioRoute()
         }
     }
@@ -781,7 +782,7 @@ internal class SyRtcEngineImpl {
     func renewToken(_ token: String) {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            eventHandler?.onError(code: 1000, message: "token 不能为空")
+            eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "token 不能为空")
             return
         }
         currentToken = trimmed
@@ -803,7 +804,7 @@ internal class SyRtcEngineImpl {
     /// 服务端权益切换请另外调用 `SyRoomService.switchQualityTier`（需要用户 JWT）。
     func setQualityTier(_ tier: String) {
         guard let parsed = SyRtcQualityTier.parse(tier) else {
-            eventHandler?.onError(code: 1003, message: "未知画质档位: \(tier)，可选 audio/sd/hd/fhd")
+            eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "未知画质档位: \(tier)，可选 audio/sd/hd/fhd")
             return
         }
         currentQualityTier = parsed.rawValue
@@ -834,15 +835,15 @@ internal class SyRtcEngineImpl {
         tokenExpireWork = nil
     }
 
-    /// RTC Token 若是带 `exp` 的 JWT，则在过期前 30 秒回调 `onTokenPrivilegeWillExpire`，过期时回调 `onRequestToken`。
+    /// Token 带过期时间（服务端 `expireAt` 或 JWT `exp`）时，过期前 30 秒回调 `onTokenPrivilegeWillExpire`，到期回调 `onRequestToken`。与 Android 相同。
     private func scheduleTokenPrivilegeWatch(token: String) {
         cancelTokenPrivilegeWatch()
-        guard let exp = Self.jwtExpiry(token) else { return }
-        let remain = exp - Date().timeIntervalSince1970
-        guard remain.isFinite else { return }
-        if remain <= 0 {
+        guard let exp = SyRtcTokenExpiry.expireAt(token) else { return }
+        let d = SyRtcTokenExpiry.delays(expireAt: exp, now: Date().timeIntervalSince1970)
+        if d.expire <= 0 {
             DispatchQueue.main.async { [weak self] in
-                self?.eventHandler?.onRequestToken()
+                guard let self, self.currentChannelId != nil else { return }
+                self.eventHandler?.onRequestToken()
             }
             return
         }
@@ -856,26 +857,8 @@ internal class SyRtcEngineImpl {
         }
         tokenWarnWork = warn
         tokenExpireWork = expired
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, remain - 30), execute: warn)
-        DispatchQueue.main.asyncAfter(deadline: .now() + remain, execute: expired)
-    }
-
-    private static func jwtExpiry(_ token: String) -> TimeInterval? {
-        let parts = token.split(separator: ".")
-        guard parts.count >= 2 else { return nil }
-        var b64 = String(parts[1])
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let pad = (4 - (b64.count % 4)) % 4
-        if pad > 0 { b64 += String(repeating: "=", count: pad) }
-        guard let data = Data(base64Encoded: b64),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        if let exp = obj["exp"] as? TimeInterval { return exp }
-        if let exp = obj["exp"] as? Int { return TimeInterval(exp) }
-        if let exp = obj["exp"] as? NSNumber { return exp.doubleValue }
-        return nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + d.warn, execute: warn)
+        DispatchQueue.main.asyncAfter(deadline: .now() + d.expire, execute: expired)
     }
     
     // MARK: - 音频配置
@@ -1156,7 +1139,7 @@ internal class SyRtcEngineImpl {
     
     func startPreview() {
         if customVideoCaptureEnabled {
-            eventHandler?.onError(code: 1007, message: "自定义采集已开启，请用 sendCustomVideoFrame 推帧")
+            eventHandler?.onError(code: SyRtcErrorCode.customCapture, message: "自定义采集已开启，请用 sendCustomVideoFrame 推帧")
             return
         }
         if !isVideoEnabled {
@@ -1166,7 +1149,7 @@ internal class SyRtcEngineImpl {
             return
         }
         guard let track = ensureCameraVideoTrack() else {
-            eventHandler?.onError(code: -1001, message: "视频源未就绪")
+            eventHandler?.onError(code: SyRtcErrorCode.camera, message: "视频源未就绪")
             return
         }
         isPreviewing = true
@@ -1225,7 +1208,7 @@ internal class SyRtcEngineImpl {
             isVideoEnabled = true
             isPreviewing = true
             guard let source = ensureCameraVideoSource(), let track = ensureCameraVideoTrack() else {
-                eventHandler?.onError(code: -1001, message: "自定义采集视频源未就绪")
+                eventHandler?.onError(code: SyRtcErrorCode.customCapture, message: "自定义采集视频源未就绪")
                 return
             }
             videoCapturer = RTCVideoCapturer(delegate: source)
@@ -1238,7 +1221,7 @@ internal class SyRtcEngineImpl {
 
     func sendCustomVideoFrame(pixelBuffer: CVPixelBuffer, rotation: Int, timestampNs: Int64) {
         guard customVideoCaptureEnabled, let source = cameraVideoSource, let capturer = videoCapturer else {
-            eventHandler?.onError(code: 1007, message: "请先 enableCustomVideoCapture(true)")
+            eventHandler?.onError(code: SyRtcErrorCode.customCapture, message: "请先 enableCustomVideoCapture(true)")
             return
         }
         let processed = videoFrameProcessor?(pixelBuffer, rotation) ?? pixelBuffer
@@ -1250,7 +1233,7 @@ internal class SyRtcEngineImpl {
 
     func setStreamExtraInfo(_ info: String) {
         if info.utf8.count > 1024 {
-            eventHandler?.onError(code: 1006, message: "流附加信息超过 1024 字节")
+            eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "流附加信息超过 1024 字节")
             return
         }
         streamExtraInfo = info
@@ -1344,7 +1327,7 @@ internal class SyRtcEngineImpl {
             return
         }
         guard ensureScreenVideoTrack() != nil else {
-            eventHandler?.onError(code: 1008, message: "屏幕共享视频源未就绪")
+            eventHandler?.onError(code: SyRtcErrorCode.screenShare, message: "屏幕共享视频源未就绪")
             return
         }
         screenCaptureConfig = config
@@ -1364,7 +1347,7 @@ internal class SyRtcEngineImpl {
             if let error = error {
                 self.isScreenCapturing = false
                 self.screenRecorder = nil
-                self.eventHandler?.onError(code: 1008, message: "启动屏幕录制失败: \(error.localizedDescription)")
+                self.eventHandler?.onError(code: SyRtcErrorCode.screenShare, message: "启动屏幕录制失败: \(error.localizedDescription)")
                 return
             }
             self.isScreenCapturing = true
@@ -1853,7 +1836,7 @@ extension SyRtcEngineImpl {
             reconnectWorkWasSignaling = false
             eventHandler?.onConnectionStateChanged(state: "failed", reason: "signaling")
             eventHandler?.onReconnectFailed(reason: "signaling")
-            eventHandler?.onError(code: 1003, message: "信令重连失败")
+            eventHandler?.onError(code: SyRtcErrorCode.reconnectFailed, message: "信令重连失败")
             return
         }
         let delayMs = SyRtcReconnectPolicy.delayMs(attempt: reconnectAttempt)
@@ -1933,7 +1916,7 @@ extension SyRtcEngineImpl {
             connectionState = "failed"
             eventHandler?.onConnectionStateChanged(state: "failed", reason: "ice")
             eventHandler?.onReconnectFailed(reason: "ice")
-            eventHandler?.onError(code: 1003, message: "媒体连接重连失败")
+            eventHandler?.onError(code: SyRtcErrorCode.reconnectFailed, message: "媒体连接重连失败")
             return
         }
         let delayMs = SyRtcReconnectPolicy.delayMs(attempt: reconnectAttempt)
@@ -2097,7 +2080,7 @@ extension SyRtcEngineImpl {
         let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
             ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: front ? .back : .front)
         guard let device else {
-            eventHandler?.onError(code: -1001, message: "没有可用摄像头（模拟器或未授权时常见）")
+            eventHandler?.onError(code: SyRtcErrorCode.camera, message: "没有可用摄像头（模拟器或未授权时常见）")
             eventHandler?.onLocalVideoStateChanged(state: "failed", error: "no_camera")
             return false
         }
