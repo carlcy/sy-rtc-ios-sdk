@@ -127,6 +127,8 @@ internal class SyRtcEngineImpl {
     private var dataStreamConfigs: [Int: (reliable: Bool, ordered: Bool)] = [:]
     private var nextDataStreamId = 1
     private var dataChannelsByPeer: [String: [Int: RTCDataChannel]] = [:]
+    /// RTCDataChannel.delegate 是 weak，必须在这里持有，否则代理立刻释放、收不到任何数据流 / SEI。
+    private var dataChannelDelegates: [String: [Int: DataChannelDelegate]] = [:]
     private var pendingForceOffer: Set<String> = []
     private var firstFrameRenderers: [String: FrameTrackingRenderer] = [:]
     private var localFrameRenderers: [String: FrameTrackingRenderer] = [:]
@@ -253,6 +255,7 @@ internal class SyRtcEngineImpl {
         pendingRemoteIceByUid.removeAll()
         pendingForceOffer.removeAll()
         dataChannelsByPeer.removeAll()
+        dataChannelDelegates.removeAll()
         remoteAudioTracks.removeAll()
         for (uid, renderer) in firstFrameRenderers { remoteVideoTracks[uid]?.remove(renderer) }
         remoteVideoTracks.removeAll()
@@ -418,6 +421,7 @@ internal class SyRtcEngineImpl {
                 pendingRemoteIceByUid.removeValue(forKey: uid)
                 pendingForceOffer.remove(uid)
                 dataChannelsByPeer.removeValue(forKey: uid)
+                dataChannelDelegates.removeValue(forKey: uid)
                 detachRemoteAudioTap(uid: uid)
                 remoteAudioTracks.removeValue(forKey: uid)
                 if let renderer = firstFrameRenderers.removeValue(forKey: uid) {
@@ -1854,6 +1858,7 @@ internal class SyRtcEngineImpl {
             channels.values.forEach { $0.close() }
         }
         dataChannelsByPeer.removeAll()
+        dataChannelDelegates.removeAll()
         dataChannelMap.removeAll()
         remoteVideoTracks.removeAll()
         remoteAudioTracks.removeAll()
@@ -2324,7 +2329,9 @@ extension SyRtcEngineImpl {
             config.maxRetransmits = 0
         }
         guard let channel = peerConnection.dataChannel(forLabel: "sy-\(streamId)", configuration: config) else { return }
-        channel.delegate = DataChannelDelegate(streamId: streamId, remoteUid: remoteUid, engine: self)
+        let delegate = DataChannelDelegate(streamId: streamId, remoteUid: remoteUid, engine: self)
+        dataChannelDelegates[remoteUid, default: [:]][streamId] = delegate
+        channel.delegate = delegate
         dataChannelsByPeer[remoteUid, default: [:]][streamId] = channel
         dataChannelMap[streamId] = channel
     }
@@ -2338,7 +2345,9 @@ extension SyRtcEngineImpl {
     fileprivate func handleOpenedDataChannel(_ channel: RTCDataChannel, remoteUid: String) {
         let label = channel.label
         guard label.hasPrefix("sy-"), let streamId = Int(label.dropFirst(3)) else { return }
-        channel.delegate = DataChannelDelegate(streamId: streamId, remoteUid: remoteUid, engine: self)
+        let delegate = DataChannelDelegate(streamId: streamId, remoteUid: remoteUid, engine: self)
+        dataChannelDelegates[remoteUid, default: [:]][streamId] = delegate
+        channel.delegate = delegate
         dataChannelsByPeer[remoteUid, default: [:]][streamId] = channel
         dataChannelMap[streamId] = channel
         if dataStreamConfigs[streamId] == nil {

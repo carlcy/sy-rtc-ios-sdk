@@ -5,10 +5,10 @@ use_frameworks!
 
 target 'SyRtcSDKExample' do
   # 与客户集成方式一致：库名 + 版本。不要用 :path，也不要下载 / 解压 xcframework。
-  # 该行在 CocoaPods Trunk 发布 3.2.0 之后执行 `pod install` 即可。
+  # 该行在 CocoaPods Trunk 发布 3.2.1 之后执行 `pod install` 即可。
   # Trunk 尚未收录时，改用同一版本的 git tag（仍然是版本，不是本地路径）：
-  # pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.0'
-  pod 'SyRtcSDK', '~> 3.2.0'
+  # pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.1'
+  pod 'SyRtcSDK', '~> 3.2.1'
 end
 
 post_install do |installer|
