@@ -12,7 +12,7 @@ pod 'SyRtcSDK', '~> 3.2.1'
 
 这一行在 [CocoaPods Trunk](https://cocoapods.org) 已有 3.2.1 之后可以直接安装。维护者发布步骤见仓库根目录 [PUBLISH_GUIDE.md](../PUBLISH_GUIDE.md)。
 
-tag `v3.2.1` 已经推到 GitHub、但 Trunk 还没索引时，把 Podfile 改成：
+SyRtcSDK 3.2.1 已在 Trunk。本机 CDN 缓存未更新（`pod repo update` 仍找不到）时，可临时把 Podfile 改成：
 
 ```ruby
 pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.1'

@@ -16,7 +16,7 @@ pod install
 open SyRtcSDKExample.xcworkspace
 ```
 
-Trunk 尚未发布该版本时，改用 `pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.1'`。不要下载 zip。
+本机 CDN 缓存未更新时，可临时改用 `pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.1'`。不要下载 zip。
 
 命令行构建（模拟器）：
 

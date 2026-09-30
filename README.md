@@ -31,7 +31,7 @@ pod install
 
 之后用 `.xcworkspace` 打开工程。
 
-`pod 'SyRtcSDK', '~> 3.2.1'` 在 SDK 发布到 CocoaPods Trunk 之后生效。还没上 Trunk 时，用同一个版本 tag：
+`SyRtcSDK` 已发布到 CocoaPods Trunk（3.2.0、3.2.1），`pod 'SyRtcSDK', '~> 3.2.1'` 直接可用。本机 CDN 缓存还没更新时可先 `pod repo update`，或临时用同一个版本 tag：
 
 ```ruby
 pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.1'
