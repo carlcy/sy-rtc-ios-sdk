@@ -2356,7 +2356,7 @@ extension SyRtcEngineImpl {
                 eventHandler?.onNetworkQuality(uid: localUid, txQuality: "unknown", rxQuality: "unknown")
             }
             if reportVolume && volumeIntervalMs > 0 {
-                eventHandler?.onVolumeIndication(speakers: [SyVolumeInfo(uid: localUid, volume: localAudioMuted ? 0 : 0, vad: 0)])
+                eventHandler?.onVolumeIndication(speakers: [SyVolumeInfo(uid: localUid, volume: 0, vad: 0)])
             }
             return
         }
