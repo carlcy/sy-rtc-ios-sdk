@@ -236,6 +236,8 @@ if let serviceError = error as? SyRtcServiceError {
 }
 ```
 
+运行时版本号：`SyRtcSDKVersion.current` 为 `3.2.0`，与 podspec、`VERSION` 和 Android `RtcEngine.VERSION` 一致。
+
 应用内屏幕共享失败（常见于模拟器）会回调 `onError`，不会把状态标成正在共享。系统广播扩展见 [BroadcastExtension/README.md](BroadcastExtension/README.md)，扩展进程里的帧到不了引擎。
 
 ## 示例工程
