@@ -97,3 +97,53 @@ public enum SyRtcTokenExpiry {
         return (max(0, expire - warnBeforeSeconds), expire)
     }
 }
+
+/// Token 过期提醒去重：本地定时器与服务端推送（`token-privilege-will-expire` / `token-expired`，
+/// `data.expireAt`）各自可能触发，同一个 Token 只回调一次提醒、一次过期。与 Android `TokenExpiryDedupe` 相同。
+/// 过期后不补提醒；推送的 `expireAt` 早于当前 Token 时忽略；join / renewToken 时 `reset`。
+public final class SyRtcTokenExpiryDedupe {
+    public enum Kind { case willExpire, expired }
+
+    private let lock = NSLock()
+    private var expireAt: TimeInterval?
+    private var warned = false
+    private var expired = false
+
+    public init() {}
+
+    public func reset(currentExpireAt: TimeInterval?) {
+        lock.lock(); defer { lock.unlock() }
+        expireAt = currentExpireAt
+        warned = false
+        expired = false
+    }
+
+    /// 返回 true 表示应回调。`eventExpireAt` 为推送里的 `expireAt`，本地定时器传 nil。
+    public func shouldFire(_ kind: Kind, eventExpireAt: TimeInterval? = nil) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if let e = eventExpireAt, let cur = expireAt, e < cur { return false }
+        switch kind {
+        case .willExpire:
+            if warned || expired { return false }
+            warned = true
+            return true
+        case .expired:
+            if expired { return false }
+            expired = true
+            warned = true
+            return true
+        }
+    }
+
+    /// 推送 data 里的 `expireAt`（数字或字符串）。
+    public static func expireAt(of data: [String: Any]) -> TimeInterval? {
+        let v: TimeInterval?
+        switch data["expireAt"] {
+        case let n as NSNumber: v = n.doubleValue
+        case let s as String: v = TimeInterval(s)
+        default: v = nil
+        }
+        guard let x = v, x > 0 else { return nil }
+        return x
+    }
+}

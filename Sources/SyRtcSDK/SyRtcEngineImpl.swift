@@ -438,9 +438,13 @@ internal class SyRtcEngineImpl {
         case "user-media":
             applyRemoteMediaState(data)
         case "token-will-expire", "token-privilege-will-expire":
-            eventHandler?.onTokenPrivilegeWillExpire()
+            if tokenExpiryDedupe.shouldFire(.willExpire, eventExpireAt: SyRtcTokenExpiryDedupe.expireAt(of: data)) {
+                eventHandler?.onTokenPrivilegeWillExpire()
+            }
         case "token-expired", "request-token":
-            eventHandler?.onRequestToken()
+            if tokenExpiryDedupe.shouldFire(.expired, eventExpireAt: SyRtcTokenExpiryDedupe.expireAt(of: data)) {
+                eventHandler?.onRequestToken()
+            }
         case "error":
             eventHandler?.onError(code: SyRtcErrorCode.forSignalingError(data),
                                   message: SyRtcErrorCode.signalingErrorMessage(data))
@@ -855,25 +859,28 @@ internal class SyRtcEngineImpl {
     }
 
     /// Token 带过期时间（服务端 `expireAt` 或 JWT `exp`）时，过期前 30 秒回调 `onTokenPrivilegeWillExpire`，到期回调 `onRequestToken`。与 Android 相同。
+    private let tokenExpiryDedupe = SyRtcTokenExpiryDedupe()
+
+    private func fireLocalTokenEvent(_ kind: SyRtcTokenExpiryDedupe.Kind) {
+        guard currentChannelId != nil, tokenExpiryDedupe.shouldFire(kind) else { return }
+        switch kind {
+        case .willExpire: eventHandler?.onTokenPrivilegeWillExpire()
+        case .expired: eventHandler?.onRequestToken()
+        }
+    }
+
     private func scheduleTokenPrivilegeWatch(token: String) {
         cancelTokenPrivilegeWatch()
-        guard let exp = SyRtcTokenExpiry.expireAt(token) else { return }
+        let exp = SyRtcTokenExpiry.expireAt(token)
+        tokenExpiryDedupe.reset(currentExpireAt: exp)
+        guard let exp else { return }
         let d = SyRtcTokenExpiry.delays(expireAt: exp, now: Date().timeIntervalSince1970)
         if d.expire <= 0 {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.currentChannelId != nil else { return }
-                self.eventHandler?.onRequestToken()
-            }
+            DispatchQueue.main.async { [weak self] in self?.fireLocalTokenEvent(.expired) }
             return
         }
-        let warn = DispatchWorkItem { [weak self] in
-            guard let self, self.currentChannelId != nil else { return }
-            self.eventHandler?.onTokenPrivilegeWillExpire()
-        }
-        let expired = DispatchWorkItem { [weak self] in
-            guard let self, self.currentChannelId != nil else { return }
-            self.eventHandler?.onRequestToken()
-        }
+        let warn = DispatchWorkItem { [weak self] in self?.fireLocalTokenEvent(.willExpire) }
+        let expired = DispatchWorkItem { [weak self] in self?.fireLocalTokenEvent(.expired) }
         tokenWarnWork = warn
         tokenExpireWork = expired
         DispatchQueue.main.asyncAfter(deadline: .now() + d.warn, execute: warn)

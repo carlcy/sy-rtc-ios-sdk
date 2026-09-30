@@ -151,7 +151,7 @@ engine.setClientRole(.host)     // 或 .audience / .publisher / .subscriber
 
 ## 续期 Token
 
-Token 快过期时 SDK 会回调 `onTokenPrivilegeWillExpire`（提前 30 秒），到期回调 `onRequestToken`。过期时间取自 Token payload 的 `expireAt`（服务端 Token 形如 `base64url(payload).签名`；也兼容 JWT 的 `exp`），`join` 和 `renewToken` 后重新计时，Android 行为相同。3.2.0 及之前只按三段式 JWT 解析，服务端签发的两段式 Token 实际从不提醒。收到后向控制面续期，再交给引擎，不要先 `leave`：
+Token 快过期时 SDK 会回调 `onTokenPrivilegeWillExpire`（提前 30 秒），到期回调 `onRequestToken`。过期时间取自 Token payload 的 `expireAt`（服务端 Token 形如 `base64url(payload).签名`；也兼容 JWT 的 `exp`），`join` 和 `renewToken` 后重新计时，Android 行为相同。3.2.0 及之前只按三段式 JWT 解析，服务端签发的两段式 Token 实际从不提醒。服务端也会推送 `token-privilege-will-expire` / `token-expired`（带 `data.expireAt`）；本地定时器与服务端推送按 Token 去重（`SyRtcTokenExpiryDedupe`），每个 Token 只回调一次提醒、一次过期，旧 Token 迟到的推送忽略。收到后向控制面续期，再交给引擎，不要先 `leave`：
 
 ```swift
 func onTokenPrivilegeWillExpire() {

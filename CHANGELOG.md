@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- Token 过期提醒去重：本地定时器与服务端推送（`token-privilege-will-expire` / `token-expired`）每个 Token 只回调一次；按 `data.expireAt` 忽略旧 Token 的迟到推送。新增 `SyRtcTokenExpiryDedupe`。与 Android 相同。
 - 本地录音：频道内改为录 WebRTC 管线里的 PCM（本端 APM 采集后处理 + 远端解码）并混音，不再另开 `AVAudioRecorder`（此前通话中只录麦克风、可能被通话抢占）；`AudioRecordingConfiguration` 新增 `includeLocal` / `includeRemote` / `aacBitrate`；`mp3` 等不支持的格式报 `onError(1000)`（此前 mp3 静默输出 PCM）。PeerConnectionFactory 改为显式传入默认 APM；podspec 的 WebRTC-SDK 固定为 125.6422.07（与 SPM、Flutter 一致，.09 改了该 init）。见 README「本地录音」。
 - 远端视频 sink 改为常驻：`onVideoSizeChanged` 在首帧及之后每次宽高或旋转变化时回调（此前只在首帧一次）；回调改在主线程（此前在 WebRTC 渲染线程）。新增 `onFirstLocalVideoFrame(width:height:elapsed:)`。规则见 `SyRtcVideoFrameTracker`，与 Android 相同。
 - `onNetworkQuality` 与 Android 统一（本端 uid = 对端最差一档，再逐个对端，按 uid 排序），新增 `SyRtcNetworkQuality.worst`；`onRtcStats` 改为每个对端一条（此前只发第一个对端）。
