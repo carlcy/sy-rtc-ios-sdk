@@ -231,6 +231,16 @@ engine.isRemoteAudioMuted(uid: "u2")    // 本机屏蔽或对端自己静音都�
 engine.isRemoteVideoMuted(uid: "u2")
 ```
 
+**网络质量。** `onNetworkQuality` 的档位由 `SyRtcNetworkQuality.level` 计算。RTT 和丢包各自落档，取较差的一档；没有样本时为 `unknown`。阈值参考即构 Express 的分级，Android 与 iOS 完全相同（两端各有同一张表的单测）。 `onRtcStats` 同时给 `packetLossRate`（0–1）和 `lossPercent`（0–100）。
+
+| 档位 | RTT (ms) | 丢包 |
+|---|---|---|
+| `excellent` | < 100 | < 1% |
+| `good` | < 200 | < 3% |
+| `poor` | < 400 | < 8% |
+| `bad` | < 800 | < 20% |
+| `down` | ≥ 800 | ≥ 20% |
+
 **与 Android 互通。** 静音通知走信令 `user-media`（对端 `onUserMuteAudio` / `onUserMuteVideo`），附加信息走频道消息 `sy-extra:<文本>`（UTF-8 最多 1024 字节，新成员进房会补发），SEI 走 DataChannel `SYSEI` 前缀。这些保留消息不会进 `onChannelMessage`。旧版 Android（3.1）的 JSON 信封 `stream-extra` / `client-mute` 也能解析。DataChannel 回调（`onStreamMessage` / `onSeiMessage`）在主线程。
 
 Token 失败时把错误转成 `SyRtcServiceError` 看说明：4031 凭证已停用，4032 已吊销，4033 已过期。

@@ -2220,7 +2220,11 @@ extension SyRtcEngineImpl {
                         "quality": sample.quality
                     ]
                     if let rtt = sample.rttMs { stats["rttMs"] = rtt }
-                    if let loss = sample.loss { stats["packetLoss"] = loss }
+                    if let loss = sample.loss {
+                        stats["packetLoss"] = loss
+                        stats["packetLossRate"] = loss
+                        stats["lossPercent"] = loss * 100
+                    }
                     self.eventHandler?.onRtcStats(stats: stats)
                 }
             }
@@ -2247,14 +2251,7 @@ extension SyRtcEngineImpl {
     }
 
     fileprivate static func qualityRank(_ quality: String) -> Int {
-        switch quality {
-        case "excellent": return 0
-        case "good": return 1
-        case "poor": return 2
-        case "bad": return 3
-        case "down": return 4
-        default: return -1
-        }
+        SyRtcNetworkQuality.rank(quality)
     }
 
     fileprivate static func parseStatistics(_ report: RTCStatisticsReport) -> (quality: String, inboundLevel: Double?, outboundLevel: Double?, rttMs: Double?, loss: Double?) {
