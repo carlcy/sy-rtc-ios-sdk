@@ -105,6 +105,9 @@ internal class SyRtcEngineImpl {
     private var muteAllRemoteVideo = false
     private var remoteAudioMuted: [String: Bool] = [:]
     private var remoteAudioTracks: [String: RTCAudioTrack] = [:]
+    /// 上一轮下行累计丢包 / 收包（按对端），用于算本周期下行丢包率。
+    private var lastInboundLost: [String: Int64] = [:]
+    private var lastInboundRecv: [String: Int64] = [:]
     private var streamExtraInfo = ""
     private let streamExtraPrefix = SyRtcWire.streamExtraPrefix
     private var signalingGeneration = 0
@@ -1961,6 +1964,8 @@ extension SyRtcEngineImpl {
         let stop = { [weak self] in
             self?.qualityTimer?.invalidate()
             self?.qualityTimer = nil
+            self?.lastInboundLost.removeAll()
+            self?.lastInboundRecv.removeAll()
         }
         if Thread.isMainThread {
             stop()
@@ -2357,35 +2362,52 @@ extension SyRtcEngineImpl {
         }
         let group = DispatchGroup()
         let lock = NSLock()
-        var rows: [(uid: String, quality: String, inbound: Double?, outbound: Double?, rttMs: Double?, loss: Double?)] = []
+        var samples: [(uid: String, sample: SyRtcStatsSample)] = []
         for (uid, pc) in pcs {
             group.enter()
             pc.statistics { report in
                 let parsed = Self.parseStatistics(report)
                 lock.lock()
-                rows.append((uid, parsed.quality, parsed.inboundLevel, parsed.outboundLevel, parsed.rttMs, parsed.loss))
+                samples.append((uid, parsed))
                 lock.unlock()
                 group.leave()
             }
         }
         group.notify(queue: .main) { [weak self] in
             guard let self, self.currentChannelId != nil else { return }
+            // 上下行分开（与 Android 相同）：tx = RTT + 上行丢包，rx = 本周期下行丢包 + 抖动。
+            let rows = samples.map { item -> (uid: String, tx: String, rx: String, rxLoss: Double?, sample: SyRtcStatsSample, inbound: Double?, outbound: Double?) in
+                let s = item.sample
+                let rxLoss = SyRtcLinkQuality.intervalLossRate(prevLost: self.lastInboundLost[item.uid], prevReceived: self.lastInboundRecv[item.uid],
+                                                               lost: s.inboundPacketsLost, received: s.inboundPacketsReceived)
+                if let v = s.inboundPacketsLost { self.lastInboundLost[item.uid] = v }
+                if let v = s.inboundPacketsReceived { self.lastInboundRecv[item.uid] = v }
+                return (item.uid, SyRtcLinkQuality.tx(rttMs: s.rttMs, outboundLossRate: s.outboundLossRate),
+                        SyRtcLinkQuality.rx(inboundLossRate: rxLoss, jitterMs: s.jitterMs), rxLoss, s,
+                        s.inboundAudioLevel, s.outboundAudioLevel)
+            }
             if reportQuality {
-                let worst = SyRtcNetworkQuality.worst(rows.map(\.quality))
-                self.eventHandler?.onNetworkQuality(uid: localUid, txQuality: worst, rxQuality: worst)
+                self.eventHandler?.onNetworkQuality(uid: localUid,
+                                                    txQuality: SyRtcNetworkQuality.worst(rows.map(\.tx)),
+                                                    rxQuality: SyRtcNetworkQuality.worst(rows.map(\.rx)))
                 let sorted = rows.sorted { $0.uid < $1.uid }
                 for row in sorted {
-                    self.eventHandler?.onNetworkQuality(uid: row.uid, txQuality: row.quality, rxQuality: row.quality)
+                    self.eventHandler?.onNetworkQuality(uid: row.uid, txQuality: row.tx, rxQuality: row.rx)
                 }
                 // 每个对端一条 onRtcStats（与 Android 相同）。
-                for sample in sorted {
+                for row in sorted {
                     var stats: [String: Any] = [
                         "networkType": self.networkType,
-                        "uid": sample.uid,
-                        "quality": sample.quality
+                        "uid": row.uid,
+                        "quality": SyRtcNetworkQuality.worst([row.tx, row.rx]),
+                        "txQuality": row.tx,
+                        "rxQuality": row.rx,
                     ]
-                    if let rtt = sample.rttMs { stats["rttMs"] = rtt }
-                    if let loss = sample.loss {
+                    if let rtt = row.sample.rttMs { stats["rttMs"] = rtt }
+                    if let l = row.sample.outboundLossRate { stats["txPacketLossRate"] = l }
+                    if let l = row.rxLoss { stats["rxPacketLossRate"] = l }
+                    if let j = row.sample.jitterMs { stats["jitterMs"] = j }
+                    if let loss = row.sample.outboundLossRate ?? row.rxLoss {
                         stats["packetLoss"] = loss
                         stats["packetLossRate"] = loss
                         stats["lossPercent"] = loss * 100
@@ -2419,35 +2441,8 @@ extension SyRtcEngineImpl {
         SyRtcNetworkQuality.rank(quality)
     }
 
-    fileprivate static func parseStatistics(_ report: RTCStatisticsReport) -> (quality: String, inboundLevel: Double?, outboundLevel: Double?, rttMs: Double?, loss: Double?) {
-        var rttMs: Double?
-        var loss: Double?
-        var inboundLevel: Double?
-        var outboundLevel: Double?
-        for stat in report.statistics.values {
-            let values = stat.values
-            if stat.type == "candidate-pair" {
-                let nominated = (values["nominated"] as? NSNumber)?.boolValue ?? false
-                let state = values["state"] as? String
-                if nominated || state == "succeeded", let rtt = values["currentRoundTripTime"] as? NSNumber {
-                    rttMs = rtt.doubleValue * 1000
-                }
-            } else if stat.type == "inbound-rtp" {
-                let lost = (values["packetsLost"] as? NSNumber)?.doubleValue ?? 0
-                let received = (values["packetsReceived"] as? NSNumber)?.doubleValue ?? 0
-                let total = lost + received
-                if total > 0 {
-                    loss = lost / total
-                }
-                if Self.isAudioStat(stat), let level = values["audioLevel"] as? NSNumber {
-                    inboundLevel = level.doubleValue
-                }
-            } else if stat.type == "outbound-rtp", Self.isAudioStat(stat),
-                      let level = values["audioLevel"] as? NSNumber {
-                outboundLevel = level.doubleValue
-            }
-        }
-        return (SyRtcNetworkQuality.level(rttMs: rttMs, packetLossRatio: loss), inboundLevel, outboundLevel, rttMs, loss)
+    fileprivate static func parseStatistics(_ report: RTCStatisticsReport) -> SyRtcStatsSample {
+        SyRtcStatsSample.parse(report.statistics.values.map { ($0.type, $0.values as [String: Any], Self.isAudioStat($0)) })
     }
 
     fileprivate static func isAudioStat(_ stat: RTCStatistics) -> Bool {
