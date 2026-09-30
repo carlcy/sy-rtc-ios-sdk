@@ -58,6 +58,12 @@ internal class SyRtcEngineImpl {
     // 音频录制
     private var audioRecorder: AVAudioRecorder?
     private var audioRecordingConfig: AudioRecordingConfiguration?
+    /// 频道内录音：WebRTC 管线里的 PCM（本端采集后处理 + 远端解码）混音。与 Android 相同。
+    private var callRecorder: SyRtcCallAudioRecorder?
+    private let captureAudioTap = SyRtcCaptureAudioTap()
+    /// capturePostProcessingDelegate 是 weak，需要自己持有。
+    private var audioProcessingModule: RTCDefaultAudioProcessingModule?
+    private var remoteAudioTaps: [String: SyRtcRemoteAudioTap] = [:]
     
     // 数据流
     private var dataStreams: [Int: Bool] = [:]
@@ -226,6 +232,7 @@ internal class SyRtcEngineImpl {
     }
 
     func leave() {
+        if callRecorder != nil { stopAudioRecording() }
         connectionState = "disconnecting"
         eventHandler?.onConnectionStateChanged(state: "disconnecting", reason: "leaving")
         signalingGeneration += 1
@@ -408,6 +415,7 @@ internal class SyRtcEngineImpl {
                 pendingRemoteIceByUid.removeValue(forKey: uid)
                 pendingForceOffer.remove(uid)
                 dataChannelsByPeer.removeValue(forKey: uid)
+                detachRemoteAudioTap(uid: uid)
                 remoteAudioTracks.removeValue(forKey: uid)
                 if let renderer = firstFrameRenderers.removeValue(forKey: uid) {
                     remoteVideoTracks[uid]?.remove(renderer)
@@ -541,9 +549,16 @@ internal class SyRtcEngineImpl {
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
         
+        // 默认 APM（回声消除等与之前相同），另挂采集后处理回调，供通话录音取本端 PCM。
+        // RTCAudioProcessingConfig 未导出到 Swift，带参 init 不可见；用默认 init 再设 delegate。
+        let apm = RTCDefaultAudioProcessingModule()
+        apm.capturePostProcessingDelegate = captureAudioTap
+        audioProcessingModule = apm
         peerConnectionFactory = RTCPeerConnectionFactory(
+            bypassVoiceProcessing: false,
             encoderFactory: encoderFactory,
-            decoderFactory: decoderFactory
+            decoderFactory: decoderFactory,
+            audioProcessingModule: apm
         )
         
         print("WebRTC初始化成功")
@@ -1613,46 +1628,112 @@ internal class SyRtcEngineImpl {
     // MARK: - 音频录制
     
     func startAudioRecording(_ config: AudioRecordingConfiguration) -> Int {
-        if audioRecorder != nil {
+        if audioRecorder != nil || callRecorder != nil {
             print("音频录制已在进行中")
             return -1
         }
-        
+        guard let format = SyRtcRecordingFormat.from(codec: config.codecType) else {
+            eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "不支持的录音格式 \(config.codecType)，可选 aac（.m4a）或 wav")
+            return -1
+        }
+        guard !config.filePath.isEmpty, (8000...48000).contains(config.sampleRate) else {
+            eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "filePath 不能为空，sampleRate 需在 8000–48000")
+            return -1
+        }
         audioRecordingConfig = config
-        print("开始音频录制: \(config.filePath), \(config.sampleRate)Hz, \(config.channels)ch, codec=\(config.codecType)")
-        
+        let fileURL = URL(fileURLWithPath: config.filePath)
+        print("开始音频录制: \(config.filePath), \(config.sampleRate)Hz, codec=\(config.codecType)")
+
+        if signalingClient != nil, localAudioTrack != nil {
+            // 频道内：不另开录音器（与 WebRTC 抢采集会录成静音），用 WebRTC 管线里的 PCM。
+            do {
+                let rec = try SyRtcCallAudioRecorder(url: fileURL, format: format,
+                                                     sampleRate: config.sampleRate, bitrate: config.aacBitrate)
+                callRecorder = rec
+                if config.includeLocal {
+                    captureAudioTap.onPcm = { [weak self, weak rec] pcm, rate in
+                        guard let self = self, let rec = rec else { return }
+                        if self.localAudioMuted || !self.canPublishMedia { return }
+                        rec.push(SyRtcCallAudioRecorder.localSource, mono: pcm, sourceRate: rate)
+                    }
+                }
+                if config.includeRemote {
+                    for (uid, track) in remoteAudioTracks { attachRemoteAudioTap(uid: uid, track: track) }
+                }
+                rec.start()
+                return 0
+            } catch {
+                print("启动通话录音失败: \(error)")
+                detachAllRecordingTaps()
+                callRecorder = nil
+                audioRecordingConfig = nil
+                return -1
+            }
+        }
+
+        guard format == .aacM4a else {
+            eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "未加入频道时只支持 aac")
+            audioRecordingConfig = nil
+            return -1
+        }
         let settings: [String: Any] = [
-            AVFormatIDKey: config.codecType == "aac" || config.codecType == "aacLc" ? kAudioFormatMPEG4AAC : kAudioFormatLinearPCM,
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: config.sampleRate,
-            AVNumberOfChannelsKey: config.channels,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: config.aacBitrate,
         ]
-        
         do {
-            let fileURL = URL(fileURLWithPath: config.filePath)
-            let directory = fileURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
             recorder.record()
             audioRecorder = recorder
-            print("音频录制已开始")
+            print("麦克风录音已开始（未在频道内）")
             return 0
         } catch {
             print("启动音频录制失败: \(error)")
             audioRecorder = nil
+            audioRecordingConfig = nil
             return -1
         }
     }
-    
+
+    private func attachRemoteAudioTap(uid: String, track: RTCAudioTrack) {
+        guard let rec = callRecorder, audioRecordingConfig?.includeRemote == true else { return }
+        if let old = remoteAudioTaps.removeValue(forKey: uid) { track.remove(old) }
+        let tap = SyRtcRemoteAudioTap { [weak self, weak rec] pcm, rate in
+            guard let self = self, let rec = rec else { return }
+            // 本端静音了该远端（听不到）就不录他。
+            if self.muteAllRemoteAudio || self.remoteAudioMuted[uid] == true { return }
+            rec.push(uid, mono: pcm, sourceRate: rate)
+        }
+        remoteAudioTaps[uid] = tap
+        track.add(tap)
+    }
+
+    private func detachRemoteAudioTap(uid: String) {
+        if let tap = remoteAudioTaps.removeValue(forKey: uid) { remoteAudioTracks[uid]?.remove(tap) }
+        callRecorder?.removeSource(uid)
+    }
+
+    private func detachAllRecordingTaps() {
+        captureAudioTap.onPcm = nil
+        for (uid, tap) in remoteAudioTaps { remoteAudioTracks[uid]?.remove(tap) }
+        remoteAudioTaps.removeAll()
+    }
+
     func stopAudioRecording() {
+        if let rec = callRecorder {
+            detachAllRecordingTaps()
+            callRecorder = nil
+            audioRecordingConfig = nil
+            rec.stop()
+            print("通话录音已停止")
+            return
+        }
         if audioRecorder == nil {
             print("音频录制未在进行中")
             return
         }
-        
-        print("停止音频录制")
-        
         audioRecorder?.stop()
         audioRecorder = nil
         audioRecordingConfig = nil
@@ -1733,6 +1814,7 @@ internal class SyRtcEngineImpl {
     // MARK: - 清理
     
     func release() {
+        if callRecorder != nil { stopAudioRecording() }
         signalingGeneration += 1
         reconnectWork?.cancel()
         resetIceRecovery()
@@ -2151,6 +2233,7 @@ extension SyRtcEngineImpl {
         } else if let audio = track as? RTCAudioTrack {
             remoteAudioTracks[uid] = audio
             audio.isEnabled = remoteAudioMuted[uid] != true && !muteAllRemoteAudio
+            attachRemoteAudioTap(uid: uid, track: audio)
             eventHandler?.onRemoteAudioStateChanged(uid: uid, state: "decoding", reason: "track", elapsed: elapsedSinceJoin())
         }
     }
@@ -2530,20 +2613,41 @@ public struct AudioEffectConfiguration {
     }
 }
 
+/// 本地录音配置。与 Android 相同：
+/// - `codecType`：`aac` / `aacLc` / `m4a` → AAC（MPEG-4，建议 `.m4a`）；`wav` / `pcm` → 16 bit WAV。
+///   **不支持 mp3**，传入回调 `onError(1000)` 并返回 -1。
+/// - 频道内：录 WebRTC 管线里的 PCM（本端采集后处理 + 远端解码），混成单声道，不另开录音器。
+///   `includeLocal` / `includeRemote` 控制是否包含本端、远端。本端静音时不录本端，本端静音了某远端时不录他。
+/// - 频道外：AVAudioRecorder 录麦克风，仅 AAC。
+/// - `channels` 目前只支持 1；`quality`：`low` 32 kbps、`medium` 64 kbps、`high` 128 kbps（仅 AAC）。leave 时自动停止。
 public struct AudioRecordingConfiguration {
     public let filePath: String
     public let sampleRate: Int
     public let channels: Int
     public let codecType: String
     public let quality: String
+    public let includeLocal: Bool
+    public let includeRemote: Bool
     
     public init(filePath: String, sampleRate: Int = 32000, channels: Int = 1,
-                codecType: String = "aacLc", quality: String = "medium") {
+                codecType: String = "aacLc", quality: String = "medium",
+                includeLocal: Bool = true, includeRemote: Bool = true) {
         self.filePath = filePath
         self.sampleRate = sampleRate
         self.channels = channels
         self.codecType = codecType
         self.quality = quality
+        self.includeLocal = includeLocal
+        self.includeRemote = includeRemote
+    }
+
+    /// AAC 码率（bit/s）。
+    public var aacBitrate: Int {
+        switch quality.lowercased() {
+        case "low": return 32_000
+        case "high": return 128_000
+        default: return 64_000
+        }
     }
 }
 

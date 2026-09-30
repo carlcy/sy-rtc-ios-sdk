@@ -271,6 +271,16 @@ if let serviceError = error as? SyRtcServiceError {
 
 远端视频轨到达后挂一个常驻 sink：第一帧回调 `onFirstRemoteVideoDecoded` 和 `onFirstRemoteVideoFrame`（elapsed 为距 join 的毫秒），第一帧及之后宽、高或旋转变化时回调 `onVideoSizeChanged`（宽高为缓冲区尺寸，rotation 0/90/180/270），都在主线程。本地摄像头（含自定义采集）或屏幕共享视频轨新建后的第一帧回调 `onFirstLocalVideoFrame`。Android 相同。
 
+## 本地录音
+
+`startAudioRecording(AudioRecordingConfiguration(filePath:codecType:))`，与 Android 相同：
+
+- 格式：`aac` / `aacLc` / `m4a` 输出 AAC（MPEG-4，建议 `.m4a`）；`wav` / `pcm` 输出 16 bit WAV。**不支持 mp3**，传入回调 `onError(1000)` 并返回 -1。
+- 频道内：录 WebRTC 管线里的 PCM，本端（APM 采集后处理回调）+ 所有远端（`RTCAudioTrack` renderer）混成单声道，`includeLocal` / `includeRemote` 控制；不另开 `AVAudioRecorder`，因此不会与通话抢麦录成静音。本端静音时不录本端；本端静音了某远端时不录他。
+- 频道外：`AVAudioRecorder` 录麦克风，仅 AAC。频道外开始的录音 join 后请重新开始。
+- leave 时自动停止并写完文件；远端离开时从混音中移除。
+- 已在模拟器验证混音与写文件（单测）；本端 APM 回调与远端 renderer 在真机上的实际出声待真机验证。
+
 ## 错误码
 
 `onError(code:message:)` 的取值三端（iOS `SyRtcErrorCode`、Android `RtcErrorCode`、Flutter `SyRtcErrorCode`）相同：
