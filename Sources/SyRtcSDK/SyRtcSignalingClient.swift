@@ -11,6 +11,7 @@ internal final class SyRtcSignalingClient {
 
     private var task: URLSessionWebSocketTask?
     private let session: URLSession
+    private var closed = false
 
     init(
         signalingUrl: String,
@@ -50,15 +51,18 @@ internal final class SyRtcSignalingClient {
         receiveLoop()
     }
 
-    func disconnect() {
-        sendLeave()
+    /// - Parameter sendLeave: 正常退房传 true。续期 Token 重连信令时传 false，避免服务端把连接当成离开房间。
+    func disconnect(sendLeave: Bool = true) {
+        guard !closed else { return }
+        if sendLeave { self.sendLeave() }
+        closed = true
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
     }
 
     private func receiveLoop() {
         task?.receive { [weak self] result in
-            guard let self = self else { return }
+            guard let self = self, !self.closed else { return }
             switch result {
             case .failure:
                 self.onFailure?()
@@ -108,6 +112,20 @@ internal final class SyRtcSignalingClient {
             "channelId": channelId,
             "uid": uid,
             "data": ["uid": uid, "message": message]
+        ])
+    }
+
+    /// 本端麦克风 / 摄像头静音状态。类型是 `user-media`，避免和服务端强制静音的 `mute-audio` 混淆。
+    /// 服务端若丢弃未知类型，对端就收不到；这不是 SFU 强制断流。
+    func sendUserMedia(audioMuted: Bool?, videoMuted: Bool?) {
+        var payload: [String: Any] = ["uid": uid]
+        if let audioMuted { payload["audioMuted"] = audioMuted }
+        if let videoMuted { payload["videoMuted"] = videoMuted }
+        send([
+            "type": "user-media",
+            "channelId": channelId,
+            "uid": uid,
+            "data": payload
         ])
     }
 

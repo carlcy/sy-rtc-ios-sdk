@@ -77,6 +77,8 @@ public extension SyRtcEventHandler {
     func onFirstRemoteVideoFrame(uid: String, width: Int, height: Int, elapsed: Int) {}
     func onVideoSizeChanged(uid: String, width: Int, height: Int, rotation: Int) {}
     func onAudioRoutingChanged(routing: Int) {}
+    func onUserMuteVideo(uid: String, muted: Bool) {}
+    func onStreamExtraInfoUpdated(uid: String, extraInfo: String) {}
     func onAudioPublishStateChanged(channelId: String, oldState: String, newState: String, elapsed: Int) {}
     func onAudioSubscribeStateChanged(channelId: String, uid: String, oldState: String, newState: String, elapsed: Int) {}
 }
@@ -85,10 +87,13 @@ public extension SyRtcEventHandler {
 public struct SyVolumeInfo {
     public let uid: String
     public let volume: Int
-    
-    public init(uid: String, volume: Int) {
+    /// 人声检测。未开启 `reportVad` 时为 0；检测到能量时为 1。
+    public let vad: Int
+
+    public init(uid: String, volume: Int, vad: Int = 0) {
         self.uid = uid
         self.volume = volume
+        self.vad = vad
     }
 }
 

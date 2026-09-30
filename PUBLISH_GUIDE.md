@@ -1,101 +1,90 @@
-# iOS SDK 发布指南
+# 发布 SyRtcSDK 3.x（维护者）
 
-## 发布到 CocoaPods
+客户只写版本号，不下载 zip。发布物是：
 
-### 1. 准备工作
+- git tag `vX.Y.Z`（Swift Package Manager 靠它解析版本）
+- CocoaPods Trunk 上的同名版本，或在 Trunk 之前用 `:git` + `:tag`
 
-1. 注册 CocoaPods 账号：
-```bash
-pod trunk register your-email@example.com 'Your Name'
-```
+本仓库是 **Swift 源码包**。`Package.swift` 用 `binaryTarget` 引用与 CocoaPods 相同的 WebRTC 125.6422.07 xcframework。不要把 `SyRtcSDK.xcframework` 当成客户集成方式。`build-xcframework.sh` 只在你已经有 Xcode Framework 工程时可选，Demo 和 README 都不使用它。
 
-2. 验证 podspec：
-```bash
-pod lib lint SyRtcSDK.podspec
-```
+## 客户最终会写的两行
 
-### 2. 发布
+CocoaPods（Trunk 发布成功之后）：
 
-```bash
-pod trunk push SyRtcSDK.podspec
-```
-
-### 3. 使用
-
-在 `Podfile` 中添加：
 ```ruby
-pod 'SyRtcSDK', '~> 1.2.0'
+pod 'SyRtcSDK', '~> 3.2.0'
 ```
 
-## 发布到 Swift Package Manager
+Trunk 还没收录、但 tag 已经推上去时：
 
-### 1. 创建 Git 仓库
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/yourusername/sy-rtc-ios-sdk.git
-git push -u origin main
+```ruby
+pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.0'
 ```
 
-### 2. 创建 Release Tag
+Swift Package Manager：
 
-```bash
-git tag 1.2.0
-git push origin 1.2.0
+```swift
+.package(url: "https://github.com/carlcy/sy-rtc-ios-sdk.git", from: "3.2.0")
 ```
 
-### 3. 在 Xcode 中使用
+Xcode 里 Add Package Dependencies，URL 填 `https://github.com/carlcy/sy-rtc-ios-sdk.git`，规则选 Up to Next Major，从 `3.2.0` 起。
 
-1. File → Add Packages
-2. 输入：`https://github.com/yourusername/sy-rtc-ios-sdk`
-3. 选择版本
+示例工程 `example/Podfile` 用的就是第一行。
 
-## 构建 XCFramework
+## 切一个版本
 
-### 1. 在 Xcode 中创建 Framework 项目
+下面以 `3.2.0` 为例。换版本时三处一起改：`SyRtcSDK.podspec` 的 `s.version`、`VERSION`、README 里的示例版本号。SPM 没有单独的版本字段，版本就是 tag。
 
-1. File → New → Project
-2. 选择 "Framework"
-3. 项目名称：SyRtcSDK
-4. Language: Swift
+1. 确认 `s.source` 仍是：
 
-### 2. 添加源代码
+   ```ruby
+   s.source = { :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => "v#{s.version}" }
+   ```
 
-将 `Sources/SyRtcSDK` 中的文件添加到项目
+   tag 必须带 `v` 前缀，和历史上的 `v3.1.0` 一样。SPM 认 `v3.2.0` 和 `3.2.0` 这两种写法里的前者。
 
-### 3. 配置构建设置
+2. 提交版本号改动并推到 `main`（或你要打 tag 的提交）。
 
-- Build Libraries for Distribution = YES
-- Skip Install = NO
+3. 打 tag 并推送。**先有 tag，再 `pod trunk push`**，否则 Trunk 按 podspec 里的 tag 拉源码会失败。
 
-### 4. 构建 XCFramework
+   ```bash
+   git tag v3.2.0
+   git push origin v3.2.0
+   ```
 
-```bash
-# 构建 iOS 设备版本
-xcodebuild archive \
-  -scheme SyRtcSDK \
-  -archivePath build/ios.xcarchive \
-  -sdk iphoneos \
-  SKIP_INSTALL=NO
+4. 本机校验（需要 macOS 上的 Xcode 才能真正编译通过；Linux 上只能做清单检查）：
 
-# 构建模拟器版本
-xcodebuild archive \
-  -scheme SyRtcSDK \
-  -archivePath build/ios-sim.xcarchive \
-  -sdk iphonesimulator \
-  SKIP_INSTALL=NO
+   ```bash
+   swift package dump-package
+   swift package describe
+   pod ipc spec SyRtcSDK.podspec
+   pod lib lint SyRtcSDK.podspec --allow-warnings
+   ```
 
-# 创建 XCFramework
-xcodebuild -create-xcframework \
-  -framework build/ios.xcarchive/Products/Library/Frameworks/SyRtcSDK.framework \
-  -framework build/ios-sim.xcarchive/Products/Library/Frameworks/SyRtcSDK.framework \
-  -output build/SyRtcSDK.xcframework
-```
+   `pod spec lint` 会去克隆 tag `v3.2.0`，所以必须在第 3 步之后执行。
 
-### 5. 分发 XCFramework
+5. 注册 Trunk（每台机器、每个维护者账号一次）：
 
-- 上传到 GitHub Releases
-- 或提供下载链接
+   ```bash
+   pod trunk register you@company.com 'Your Name'
+   ```
 
+   点邮件里的确认链接。`pod trunk me` 能看到账号后继续。
+
+6. 推到 Trunk：
+
+   ```bash
+   pod trunk push SyRtcSDK.podspec
+   ```
+
+   成功后过几分钟，客户的 `pod 'SyRtcSDK', '~> 3.2.0'` 就能 `pod install`。可用 `pod trunk info SyRtcSDK` 查看。
+
+7. SPM 不需要再传一次包。tag 在 GitHub 上之后，Xcode 选 `3.2.0` 就会拉这个 tag。
+
+8. 示例工程：Trunk 可用后，在 `example/` 执行 `pod install`，用 `SyRtcSDKExample.xcworkspace` 打开。Trunk 索引还没好、但 tag 已经在仓库上时，把 Podfile 里注释的 `:git` / `:tag` 那行打开、把 `~> 3.2.0` 那行注释掉，再 `pod install`。
+
+## 不要做的事
+
+- 不要让客户或 Demo 下载 `SyRtcSDK.xcframework` / zip 再拖进 Xcode。
+- 不要在示例 Podfile 里写 `pod 'SyRtcSDK', :path => '../'`。那是本地联调，不是客户集成。
+- 不要只推 podspec 不打 `v` 开头的 tag。CocoaPods 和 SPM 都对不上版本。

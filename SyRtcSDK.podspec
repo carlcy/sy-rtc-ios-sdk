@@ -1,22 +1,21 @@
 Pod::Spec.new do |s|
   s.name             = 'SyRtcSDK'
-  s.version          = '3.1.0'
-  s.summary          = 'SY RTC iOS SDK for audio communication'
+  s.version          = '3.2.0'
+  s.summary          = 'SY RTC iOS SDK for real-time audio and video.'
   s.description      = <<-DESC
-SY RTC iOS SDK provides real-time audio and video communication capabilities.
+SY RTC iOS SDK is the source distribution of the SY real-time audio and video engine.
+Integrate it with CocoaPods by version (`pod 'SyRtcSDK', '~> 3.2.0'`) or with Swift Package Manager by git URL and version tag.
+The pod ships Swift sources and depends on WebRTC-SDK; customers do not download or unzip an SDK framework.
                        DESC
   s.homepage         = 'https://github.com/carlcy/sy-rtc-ios-sdk'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
   s.author           = { 'SY RTC Team' => 'support@sy-rtc.com' }
+  # tag 必须是 v{version}，与 SPM 的 v3.2.0 一致。先推 tag，再 pod trunk push。
   s.source           = { :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => "v#{s.version}" }
   s.ios.deployment_target = '13.0'
-  s.swift_version = '5.0'
+  s.swift_version = '5.9'
   s.source_files = 'Sources/SyRtcSDK/**/*.swift'
-  s.frameworks = 'Foundation', 'AVFoundation'
-  # WebRTC 依赖（CocoaPods，XCFramework：支持真机 + 模拟器）
-  # 版本号对齐 Android 端 webrtc-sdk: 125.6422.07
+  s.frameworks = 'Foundation', 'AVFoundation', 'UIKit', 'CoreImage', 'ReplayKit', 'CoreMedia', 'CoreVideo', 'Network'
+  # 与 Android webrtc-sdk 125.6422.07、Package.swift binaryTarget 同一主版本。
   s.dependency 'WebRTC-SDK', '~> 125.6422.07'
-  # 架构兼容性说明：
-  # - 如果你在 Apple Silicon 上遇到 Simulator 架构问题，建议在业务 App 的 Podfile/Build Settings 里做 EXCLUDED_ARCHS 配置，
-  #   而不是在 SDK podspec 中强制排除（避免出现“宿主与 pod 架构不一致”导致的编译失败）。
 end

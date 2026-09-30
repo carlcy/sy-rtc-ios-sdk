@@ -1,5 +1,33 @@
 # SY RTC iOS SDK 更新日志
 
+## 3.2.0
+
+### 集成
+
+- 明确以**源码**发布：CocoaPods `pod 'SyRtcSDK', '~> 3.2.0'`（Trunk 或 `:git` + `:tag`），Swift Package Manager 用仓库 URL 和 tag `v3.2.0`。
+- SPM 的 WebRTC 改为与 CocoaPods 相同的 `WebRTC-SDK` 125.6422.07 xcframework（`binaryTarget`），不再依赖另一套 `stasel/WebRTC` 141。
+- 示例工程去掉本地 `:path` 依赖，改为与客户相同的版本号。
+
+### 新增
+
+- `SyRoomService.renewToken`：`POST /api/rtc/token/renew`，鉴权与 `fetchToken` 相同。
+- `SyRtcEngine.renewToken` 改为更新当前 RTC Token 并重连信令（不发送 leave、不拆掉已有媒体连接）。Token 为带 `exp` 的 JWT 时，过期前 30 秒回调 `onTokenPrivilegeWillExpire`，过期时回调 `onRequestToken`。
+- `SyRtcEngine.setQualityTier` / `getQualityTier`：本地画质档位 `audio|sd|hd|fhd`。
+- `SyRoomService.switchQualityTier`：`POST /api/rtc/quality/switch`（需要用户 JWT）。
+- `SyRoomService.setRoomAttribute` / `getRoomAttributes` / `deleteRoomAttribute`：房间属性，对应 `POST /api/rtc/channel/meta/set|get|delete`（需要用户 JWT）。
+- `SyRtcServiceError`：获取或续期 Token 时识别业务码 4031（凭证已停用）、4032（已吊销）、4033（已过期），HTTP 4xx 也会先读 JSON `code`。
+- 网络质量：`onNetworkQuality` 使用 WebRTC candidate-pair RTT 与 inbound-rtp 丢包，没有统计时为 `unknown`。`getNetworkType` 来自 `NWPathMonitor`（wifi / cellular / ethernet / none），有网本身不算 excellent。
+- 设备：`switchCamera` / `useFrontCamera`，`setAudioRoute` 只在扬声器和听筒之间切换；蓝牙和有线耳机只通过 `onAudioRoutingChanged` 上报。
+- `setVideoFrameProcessor`：本地 `CVPixelBuffer` 前处理钩子。`setBeautyEffectOptions` 只记录参数，不内置美颜渲染。
+- 屏幕共享：`startScreenCapture` 把应用内 `RPScreenRecorder` 帧送进 WebRTC，并重新发 offer。`BroadcastExtension/` 只是广播扩展脚手架，不跨进程传帧。主 App 进程可调用 `pushScreenSampleBuffer`。
+- 静音：`muteLocalAudio` / `muteLocalVideoStream` 会关轨道，并用信令类型 `user-media` 通知对端（`onUserMuteAudio` / `onUserMuteVideo`）。这不是 SFU 强制断流；服务端 `mute-audio` 仍走 `onServerMuteAudio`。
+- 音量：`enableAudioVolumeIndication` 读取 WebRTC `audioLevel`（0–255），不再固定返回 0。
+- `setStreamExtraInfo`：用信令广播附加信息（保留前缀 `sy-extra:`，回调 `onStreamExtraInfoUpdated`），不是视频 SEI。
+- `enableCustomVideoCapture` / `sendCustomVideoFrame`：外部像素缓冲进本地视频轨。
+- 信令断开后按 1、2、4、8、16 秒重连，最多 5 次，不拆掉已有 PeerConnection；成功后 `onRejoinChannelSuccess`。ICE 状态变化走 `onConnectionStateChanged`。
+- `createDataStream` / `sendStreamMessage` 建在真实的网格 PeerConnection 上（标签 `sy-<id>`），不再创建一条未连接的 `"default"` 连接。对端 `didOpen` 后回调 `onStreamMessage`。
+- 远端视频轨在 Unified Plan 的 `didAddReceiver` 上绑定。发布摄像头或屏幕时即使本端 uid 较大也会重新 offer，否则对端收不到画面。
+
 ## 3.1.0
 
 ### 重大变更 / Breaking

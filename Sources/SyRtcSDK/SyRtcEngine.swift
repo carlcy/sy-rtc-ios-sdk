@@ -1,4 +1,6 @@
 import Foundation
+import CoreMedia
+import CoreVideo
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -66,6 +68,10 @@ public class SyRtcEngine {
         impl?.muteLocalAudio(muted)
     }
 
+    public func isLocalAudioMuted() -> Bool {
+        impl?.isLocalAudioMuted() ?? false
+    }
+
     public func sendChannelMessage(_ message: String) {
         impl?.sendChannelMessage(message)
     }
@@ -117,6 +123,15 @@ public class SyRtcEngine {
         return impl?.isSpeakerphoneEnabled() ?? false
     }
 
+    /// 只支持 `.speaker` 与 `.earpiece`。蓝牙和有线耳机由系统路由决定。
+    public func setAudioRoute(_ route: SyRtcAudioRoute) {
+        impl?.setAudioRoute(route)
+    }
+
+    public func getAudioRoute() -> SyRtcAudioRoute {
+        impl?.getAudioRoute() ?? .unknown
+    }
+
     // MARK: - 远端音频控制
 
     public func muteRemoteAudioStream(uid: String, muted: Bool) {
@@ -137,6 +152,10 @@ public class SyRtcEngine {
 
     // MARK: - Token 刷新
 
+    /// 用新的 RTC Token 更新当前会话。
+    ///
+    /// 未进房时只保存 Token。已进房时会用不带 leave 的方式重连信令（URL 上的 token 以服务端为准），已建立的媒体连接保留。
+    /// 新 Token 请向控制面重新申请，例如 `SyRoomService.renewToken`（`POST /api/rtc/token/renew`）。
     public func renewToken(_ token: String) {
         impl?.renewToken(token)
     }
@@ -157,6 +176,23 @@ public class SyRtcEngine {
 
     public func setAudioQuality(_ quality: String) {
         impl?.setAudioQuality(quality)
+    }
+
+    /// 切换本地画质档位（`audio` / `sd` / `hd` / `fhd`），立即作用到音频参数和视频编码配置。
+    ///
+    /// 这只改本端采集。若要让控制面按新档位计费或重签 Token，请调用 `SyRoomService.switchQualityTier`（需要用户 JWT）。
+    public func setQualityTier(_ tier: SyRtcQualityTier) {
+        impl?.setQualityTier(tier.rawValue)
+    }
+
+    /// 与 `setQualityTier(_: SyRtcQualityTier)` 相同，便于直接传入后台返回的字符串。
+    public func setQualityTier(_ tier: String) {
+        impl?.setQualityTier(tier)
+    }
+
+    /// 最近一次成功设置的画质档位；尚未设置时为 `sd`。
+    public func getQualityTier() -> String {
+        impl?.getQualityTier() ?? SyRtcQualityTier.sd.rawValue
     }
 
     // MARK: - 音频设备管理
@@ -237,6 +273,43 @@ public class SyRtcEngine {
         impl?.muteLocalVideoStream(muted)
     }
 
+    public func isLocalVideoMuted() -> Bool {
+        impl?.isLocalVideoMuted() ?? false
+    }
+
+    /// 在前后摄像头之间切换。自定义采集开启时无效。
+    public func switchCamera() {
+        impl?.switchCamera()
+    }
+
+    public func useFrontCamera(_ front: Bool) {
+        impl?.useFrontCamera(front)
+    }
+
+    /// 本地视频帧钩子。返回的缓冲会送进 WebRTC 编码器。不是云端美颜。
+    public func setVideoFrameProcessor(_ processor: SyRtcVideoFrameProcessor?) {
+        impl?.setVideoFrameProcessor(processor)
+    }
+
+    /// 停止摄像头，改由 `sendCustomVideoFrame` 推帧。
+    public func enableCustomVideoCapture(_ enabled: Bool) {
+        impl?.enableCustomVideoCapture(enabled)
+    }
+
+    public func sendCustomVideoFrame(pixelBuffer: CVPixelBuffer, rotation: Int = 0, timestampNs: Int64 = 0) {
+        impl?.sendCustomVideoFrame(pixelBuffer: pixelBuffer, rotation: rotation, timestampNs: timestampNs)
+    }
+
+    /// 通过信令广播一段附加信息（最长 1024 字节），不是视频 SEI。
+    /// 前缀 `sy-extra:` 被保留，收到后走 `onStreamExtraInfoUpdated`，不会再进 `onChannelMessage`。
+    public func setStreamExtraInfo(_ extraInfo: String) {
+        impl?.setStreamExtraInfo(extraInfo)
+    }
+
+    public func getStreamExtraInfo() -> String {
+        impl?.getStreamExtraInfo() ?? ""
+    }
+
     public func muteRemoteVideoStream(uid: String, muted: Bool) {
         impl?.muteRemoteVideoStream(uid: uid, muted: muted)
     }
@@ -275,6 +348,11 @@ public class SyRtcEngine {
 
     public func stopScreenCapture() {
         impl?.stopScreenCapture()
+    }
+
+    /// 把进程内的屏幕帧送进 WebRTC。Broadcast Extension 里调用无效。
+    public func pushScreenSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        impl?.pushScreenSampleBuffer(sampleBuffer)
     }
 
     public func updateScreenCaptureConfiguration(_ config: ScreenCaptureConfiguration) {

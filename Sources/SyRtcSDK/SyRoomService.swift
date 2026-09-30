@@ -143,7 +143,7 @@ public final class SyRoomService {
     ) {
         guard let request = request else {
             DispatchQueue.main.async {
-                completion(.failure(SyRoomServiceError.invalidRequest))
+                completion(.failure(SyRtcServiceError.invalidRequest))
             }
             return
         }
@@ -154,13 +154,24 @@ public final class SyRoomService {
                 return
             }
             guard let data = data else {
-                DispatchQueue.main.async { completion(.failure(SyRoomServiceError.noData)) }
+                DispatchQueue.main.async { completion(.failure(SyRtcServiceError.noData)) }
+                return
+            }
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            if let code = SyRtcServiceError.codeValue(json?["code"]),
+               code == 4031 || code == 4032 || code == 4033 {
+                let err = SyRtcServiceError.make(
+                    code: code,
+                    serverMessage: Self.serverMessage(in: json),
+                    fallback: "凭证错误"
+                )
+                DispatchQueue.main.async { completion(.failure(err)) }
                 return
             }
             if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-                let message = String(data: data, encoding: .utf8) ?? "Unknown error"
+                let message = Self.serverMessage(in: json) ?? String(data: data, encoding: .utf8) ?? "Unknown error"
                 DispatchQueue.main.async {
-                    completion(.failure(SyRoomServiceError.httpError(statusCode: http.statusCode, message: message)))
+                    completion(.failure(SyRtcServiceError.httpError(statusCode: http.statusCode, message: message)))
                 }
                 return
             }
@@ -173,6 +184,12 @@ public final class SyRoomService {
         }.resume()
     }
 
+    private static func serverMessage(in json: [String: Any]?) -> String? {
+        if let msg = json?["msg"] as? String { return msg }
+        if let msg = json?["message"] as? String { return msg }
+        return nil
+    }
+
     // MARK: - Public API
 
     /// Fetches the list of active rooms.
@@ -183,7 +200,7 @@ public final class SyRoomService {
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let code = json?["code"] as? Int ?? -1
             if code != 0 {
-                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "获取房间列表失败")
+                throw SyRtcServiceError.make(code: code, serverMessage: json?["msg"] as? String, fallback: "获取房间列表失败")
             }
             let list = json?["data"] as? [[String: Any]] ?? []
             return list.compactMap { SyRoomInfo(from: $0) }
@@ -200,10 +217,10 @@ public final class SyRoomService {
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let code = json?["code"] as? Int ?? -1
             if code != 0 {
-                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "创建房间失败")
+                throw SyRtcServiceError.make(code: code, serverMessage: json?["msg"] as? String, fallback: "创建房间失败")
             }
             guard let dict = json?["data"] as? [String: Any], let room = SyRoomInfo(from: dict) else {
-                throw SyRoomServiceError.parseError
+                throw SyRtcServiceError.parseError
             }
             return room
         } completion: { completion($0) }
@@ -228,10 +245,10 @@ public final class SyRoomService {
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let code = json?["code"] as? Int ?? -1
             if code != 0 {
-                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "获取房间详情失败")
+                throw SyRtcServiceError.make(code: code, serverMessage: json?["msg"] as? String, fallback: "获取房间详情失败")
             }
             guard let dict = json?["data"] as? [String: Any], let room = SyRoomInfo(from: dict) else {
-                throw SyRoomServiceError.parseError
+                throw SyRtcServiceError.parseError
             }
             return room
         } completion: { completion($0) }
@@ -271,6 +288,53 @@ public final class SyRoomService {
         meta: Bool = false,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
+        requestRtcToken(
+            path: "api/rtc/token",
+            channelId: channelId,
+            uid: uid,
+            expireHours: expireHours,
+            role: role,
+            qualityTier: qualityTier,
+            meta: meta,
+            completion: completion
+        )
+    }
+
+    /// Renew an RTC token: `POST /api/rtc/token/renew`.
+    ///
+    /// Same query and auth as `fetchToken` (`X-App-Id` plus `X-App-Secret` or user JWT).
+    /// Pass the returned string to `SyRtcEngine.renewToken` without leaving the channel.
+    public func renewToken(
+        channelId: String,
+        uid: String,
+        expireHours: Int = 24,
+        role: String? = nil,
+        qualityTier: String? = nil,
+        meta: Bool = false,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        requestRtcToken(
+            path: "api/rtc/token/renew",
+            channelId: channelId,
+            uid: uid,
+            expireHours: expireHours,
+            role: role,
+            qualityTier: qualityTier,
+            meta: meta,
+            completion: completion
+        )
+    }
+
+    private func requestRtcToken(
+        path: String,
+        channelId: String,
+        uid: String,
+        expireHours: Int,
+        role: String?,
+        qualityTier: String?,
+        meta: Bool,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
         var queryItems = [
             URLQueryItem(name: "channelId", value: channelId),
             URLQueryItem(name: "uid", value: uid),
@@ -285,12 +349,12 @@ public final class SyRoomService {
         if meta {
             queryItems.append(URLQueryItem(name: "meta", value: "true"))
         }
-        let req = request(path: "api/rtc/token", method: "POST", queryItems: queryItems)
+        let req = request(path: path, method: "POST", queryItems: queryItems)
         perform(req) { (data: Data) throws -> String in
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let code = json?["code"] as? Int ?? -1
             if code != 0 {
-                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "获取 Token 失败")
+                throw SyRtcServiceError.make(code: code, serverMessage: json?["msg"] as? String, fallback: "获取 Token 失败")
             }
             if let token = json?["data"] as? String { return token }
             if let obj = json?["data"] as? [String: Any] {
@@ -301,8 +365,161 @@ public final class SyRoomService {
                 }
                 if let token = obj["token"] as? String { return token }
             }
-            throw SyRoomServiceError.parseError
+            throw SyRtcServiceError.parseError
         } completion: { completion($0) }
+    }
+
+    /// Switch the control-plane quality tier: `POST /api/rtc/quality/switch`.
+    ///
+    /// Requires a user JWT (`setAuthToken`). AppSecret is not accepted by this route.
+    /// `qualityTier` is `audio`, `sd`, `hd`, or `fhd`. On success, also call
+    /// `SyRtcEngine.setQualityTier` so local capture matches, and `renewToken` when a new RTC token is returned.
+    /// - Returns: replacement RTC token when the envelope `data` contains one; otherwise nil.
+    public func switchQualityTier(
+        channelId: String,
+        qualityTier: String,
+        uid: String? = nil,
+        completion: @escaping (Result<String?, Error>) -> Void
+    ) {
+        var queryItems = [
+            URLQueryItem(name: "channelId", value: channelId),
+            URLQueryItem(name: "qualityTier", value: qualityTier)
+        ]
+        var body: [String: Any] = [
+            "channelId": channelId,
+            "qualityTier": qualityTier
+        ]
+        if let uid, !uid.isEmpty {
+            queryItems.append(URLQueryItem(name: "uid", value: uid))
+            body["uid"] = uid
+        }
+        let req = request(path: "api/rtc/quality/switch", method: "POST", body: body, queryItems: queryItems)
+        perform(req) { (data: Data) throws -> String? in
+            let payload = try self.envelopeData(data)
+            if let token = payload as? String, !token.isEmpty { return token }
+            if let obj = payload as? [String: Any], let token = obj["token"] as? String, !token.isEmpty {
+                return token
+            }
+            return nil
+        } completion: { completion($0) }
+    }
+
+    /// Set one room attribute (channel metadata KV): `POST /api/rtc/channel/meta/set`.
+    ///
+    /// Requires a user JWT (`setAuthToken`). Maps to ZEGO room extra info: one key and one string value.
+    public func setRoomAttribute(
+        channelId: String,
+        key: String,
+        value: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let body: [String: Any] = ["channelId": channelId, "key": key, "value": value]
+        let query = [
+            URLQueryItem(name: "channelId", value: channelId),
+            URLQueryItem(name: "key", value: key),
+            URLQueryItem(name: "value", value: value)
+        ]
+        let req = request(path: "api/rtc/channel/meta/set", method: "POST", body: body, queryItems: query)
+        perform(req) { (data: Data) throws -> Void in
+            _ = try self.envelopeData(data)
+        } completion: { completion($0) }
+    }
+
+    /// Read room attributes: `POST /api/rtc/channel/meta/get`.
+    ///
+    /// Omit `key` to ask for the whole map. Requires a user JWT (`setAuthToken`).
+    public func getRoomAttributes(
+        channelId: String,
+        key: String? = nil,
+        completion: @escaping (Result<[String: String], Error>) -> Void
+    ) {
+        var body: [String: Any] = ["channelId": channelId]
+        var query = [URLQueryItem(name: "channelId", value: channelId)]
+        if let key, !key.isEmpty {
+            body["key"] = key
+            query.append(URLQueryItem(name: "key", value: key))
+        }
+        let req = request(path: "api/rtc/channel/meta/get", method: "POST", body: body, queryItems: query)
+        perform(req) { (data: Data) throws -> [String: String] in
+            let payload = try self.envelopeData(data)
+            return self.attributes(from: payload, requestedKey: key)
+        } completion: { completion($0) }
+    }
+
+    /// Delete one room attribute: `POST /api/rtc/channel/meta/delete`.
+    ///
+    /// Requires a user JWT (`setAuthToken`).
+    public func deleteRoomAttribute(
+        channelId: String,
+        key: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let body: [String: Any] = ["channelId": channelId, "key": key]
+        let query = [
+            URLQueryItem(name: "channelId", value: channelId),
+            URLQueryItem(name: "key", value: key)
+        ]
+        let req = request(path: "api/rtc/channel/meta/delete", method: "POST", body: body, queryItems: query)
+        perform(req) { (data: Data) throws -> Void in
+            _ = try self.envelopeData(data)
+        } completion: { completion($0) }
+    }
+
+    private func envelopeData(_ data: Data) throws -> Any? {
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let code = SyRtcServiceError.codeValue(json?["code"]) ?? -1
+        if code != 0 {
+            throw SyRtcServiceError.make(code: code, serverMessage: Self.serverMessage(in: json), fallback: "请求失败")
+        }
+        return json?["data"]
+    }
+
+    private func attributes(from payload: Any?, requestedKey: String?) -> [String: String] {
+        if let text = payload as? String {
+            if let key = requestedKey, !key.isEmpty { return [key: text] }
+            return [:]
+        }
+        guard let obj = payload as? [String: Any] else { return [:] }
+        if let key = obj["key"] as? String, let value = stringValue(obj["value"]) {
+            return [key: value]
+        }
+        let nested = (obj["attrs"] as? [String: Any])
+            ?? (obj["meta"] as? [String: Any])
+            ?? (obj["attributes"] as? [String: Any])
+        if let nested {
+            return stringMap(nested)
+        }
+        if let list = obj["list"] as? [[String: Any]] {
+            var out: [String: String] = [:]
+            for item in list {
+                if let key = item["key"] as? String, let value = stringValue(item["value"]) {
+                    out[key] = value
+                }
+            }
+            return out
+        }
+        return stringMap(obj)
+    }
+
+    private func stringMap(_ raw: [String: Any]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (key, value) in raw {
+            if let text = stringValue(value) {
+                out[key] = text
+            }
+        }
+        return out
+    }
+
+    private func stringValue(_ value: Any?) -> String? {
+        switch value {
+        case let text as String:
+            return text
+        case let number as NSNumber:
+            return number.stringValue
+        default:
+            return nil
+        }
     }
 
     /// Alias of `fetchToken` (docs: getToken).
@@ -337,7 +554,7 @@ public final class SyRoomService {
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let code = json?["code"] as? Int ?? -1
             if code != 0 {
-                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "member state failed")
+                throw SyRtcServiceError.make(code: code, serverMessage: json?["msg"] as? String, fallback: "member state failed")
             }
             return (json?["data"] as? [String: Any]) ?? [:]
         } completion: { completion($0) }
@@ -353,29 +570,10 @@ public final class SyRoomService {
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let code = json?["code"] as? Int ?? -1
             if code != 0 {
-                throw SyRoomServiceError.httpError(statusCode: code, message: json?["msg"] as? String ?? "member states failed")
+                throw SyRtcServiceError.make(code: code, serverMessage: json?["msg"] as? String, fallback: "member states failed")
             }
             let dataObj = json?["data"] as? [String: Any]
             return (dataObj?["list"] as? [[String: Any]]) ?? []
         } completion: { completion($0) }
-    }
-}
-
-
-// MARK: - Errors
-
-private enum SyRoomServiceError: LocalizedError {
-    case invalidRequest
-    case noData
-    case parseError
-    case httpError(statusCode: Int, message: String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidRequest: return "Invalid request URL"
-        case .noData: return "No data received"
-        case .parseError: return "Failed to parse response"
-        case .httpError(let code, let msg): return "HTTP \(code): \(msg)"
-        }
     }
 }

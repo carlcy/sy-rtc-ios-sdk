@@ -4,11 +4,19 @@
 
 ## 运行
 
+依赖与客户相同，是版本号而不是本地路径：
+
+```ruby
+pod 'SyRtcSDK', '~> 3.2.0'
+```
+
 ```bash
 cd example
 pod install
 open SyRtcSDKExample.xcworkspace
 ```
+
+Trunk 尚未发布该版本时，改用 `pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.0'`。不要下载 zip。
 
 命令行构建（模拟器）：
 
@@ -30,7 +38,8 @@ xcodebuild -workspace SyRtcSDKExample.xcworkspace \
 | 配置 | AppId / AppSecret / API Base / Signaling / Channel / UID |
 | 请求权限 | 麦克风 + 摄像头（Info.plist 已含 Usage Description） |
 | 初始化 | `SyRtcEngine.initialize` + 信令 / API 地址 |
-| 加入 / 离开 | `POST /api/rtc/token` 后 `join` / `leave` |
+| 加入 / 离开 | `SyRoomService.fetchToken`（`POST /api/rtc/token`）后 `join` / `leave` |
+| Token 续期 | `onTokenPrivilegeWillExpire` → `SyRoomService.renewToken` → `engine.renewToken` |
 | 静音 | `muteLocalAudio` |
 | 启用视频 | `enableVideo` + `setupLocalVideo(view:)` |
 | 开始预览 | `startPreview`（绑定 `RTCMTLVideoView`） |
