@@ -20,8 +20,7 @@ platform :ios, '13.0'
 use_frameworks!
 
 target 'YourApp' do
-  # 3.3.0 还没上 CocoaPods Trunk（见下文），先用 git tag
-  pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.3.0'
+  pod 'SyRtcSDK', '~> 3.3.0'
 end
 ```
 
@@ -33,7 +32,7 @@ pod install
 
 之后用 `.xcworkspace` 打开工程。
 
-`SyRtcSDK` 3.2.0、3.2.1、3.2.2 在 CocoaPods Trunk（3.2.0 有数据流 / SEI 接收缺陷，勿用）。**3.3.0 还没上 Trunk**：它依赖的 `LiveKitClient` 不在 Trunk，`pod trunk push` 校验只查 Trunk，所以推不上去。3.3.0 用 git tag（`pod lib lint` 带 LiveKit 源已通过），`Podfile` 顶部要先写 `source 'https://github.com/livekit/podspecs.git'`，再写 `source 'https://cdn.cocoapods.org/'`。CocoaPods 下依赖 `LiveKitClient` `~> 2.15.1`（2.17.0 的 pod 编译失败）；SPM 用 2.17。
+`SyRtcSDK` 已发布到 CocoaPods Trunk（3.2.0、3.2.1、3.2.2、3.3.0；3.2.0 有数据流 / SEI 接收缺陷，勿用）。3.3.0 起依赖 `LiveKitClient`，它不在 Trunk，所以 `Podfile` 顶部必须先写 `source 'https://github.com/livekit/podspecs.git'`，再写 `source 'https://cdn.cocoapods.org/'`，否则 `pod install` 找不到 `LiveKitClient`。CocoaPods 下依赖 `LiveKitClient` `~> 2.15.1`（LiveKit 2.17.0 的 pod 编译失败）；SPM 用 2.17。本机 CDN 缓存没更新时先 `pod repo update`，或临时用 tag：`pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.3.0'`。
 
 
 ### Swift Package Manager

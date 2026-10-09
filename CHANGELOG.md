@@ -2,7 +2,7 @@
 
 ## 3.3.0
 
-> 只打了 git tag `v3.3.0`（SPM / CocoaPods `:git` + `:tag` 可用），**未上 CocoaPods Trunk**：依赖的 `LiveKitClient` 不在 Trunk，`pod trunk push` 校验失败。
+> CocoaPods Trunk 发布时跳过了 `pod trunk push` 的本地校验（它只查 Trunk，而 `LiveKitClient` 只在 LiveKit 自己的 spec 源）；发布前用带 LiveKit 源的空白工程 `pod install` + 模拟器 `xcodebuild` 验证过。
 
 - LiveKit 媒体面：`join` / `renewToken` 除了普通 Token，也接受 `POST /api/server/rtc/token`（`meta=true`）返回的整段 JSON。`mediaWired=true` 且带 `sfuUrl` / `sfuToken` 时，麦克风、摄像头、远端音视频走 LiveKit（LiveKit Swift SDK 2.17，WebRTC 带 `LiveKitWebRTC` 前缀，不与 WebRTC-SDK 冲突），否则仍是 P2P，调用方式不变。新增 `SyJoinCredentials`。
 - LiveKit 事件映射：被服务端移出 / 房间删除 / 重复身份 → `onKicked`，信令 kicked 与 LiveKit removed 同时到达时每次进房只回调一次；服务端静音本端 → `onServerMuteAudio(本端uid, true)`（SDK 不自动开麦）；网络质量与音量来自 LiveKit；非踢人断开重连 3 次，原因 `sfu_lost` / `sfu_reconnecting` / `sfu_reconnected`。
