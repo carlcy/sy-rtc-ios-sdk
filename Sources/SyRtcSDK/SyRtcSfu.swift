@@ -113,6 +113,9 @@ final class SySfuEventMapper {
             case .other: sink.sfuMediaLost(detail: detail.isEmpty ? "sfu disconnected" : detail)
             }
         case let .quality(uid, q):
+            // LiveKit can report a participant whose identity is already gone (teardown after
+            // kick / leave); an empty uid is meaningless to the app, so drop it.
+            guard !uid.isEmpty else { return }
             sink.sfuNetworkQuality(uid: uid, quality: Self.qualityLabel(q))
         case let .levels(local, remote):
             sink.sfuLevels(local: local.map(Self.clamp), remote: remote.mapValues(Self.clamp))

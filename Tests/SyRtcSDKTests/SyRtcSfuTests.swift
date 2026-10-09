@@ -81,6 +81,11 @@ final class SySfuEventMapperTests: XCTestCase {
         m.on(.reconnecting); m.on(.reconnected)
         XCTAssertEqual(s.log, ["q:u1:excellent", "q:u2:down", "q:u3:unknown", "lv:1.0:a=0.0,b=0.5", "rc", "rcd"])
     }
+    func testQualityWithEmptyUidIsDropped() {
+        let s = Sink(); let m = SySfuEventMapper(sink: s)
+        m.on(.quality(uid: "", .unknown)); m.on(.quality(uid: "u1", .good))
+        XCTAssertEqual(s.log, ["q:u1:good"])
+    }
     func testOnceFlag() {
         let f = SyOnceFlag()
         XCTAssertTrue(f.tryFire()); XCTAssertFalse(f.tryFire()); f.reset(); XCTAssertTrue(f.tryFire())
