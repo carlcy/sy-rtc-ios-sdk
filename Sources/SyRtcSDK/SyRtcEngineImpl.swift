@@ -133,6 +133,17 @@ internal class SyRtcEngineImpl {
     private var firstFrameRenderers: [String: FrameTrackingRenderer] = [:]
     private var localFrameRenderers: [String: FrameTrackingRenderer] = [:]
     private var canPublishMedia = true
+
+    // LiveKit (SFU) media plane: used when the token carries mediaWired + sfuUrl/sfuToken.
+    private var sfuSession: SyLiveKitMediaSession?
+    private var sfuMode = false
+    private let kickedOnce = SyOnceFlag()
+    private var lastLocalServerMute: Bool?
+    private var sfuReconnectAttempts = 0
+    private static let sfuMaxReconnect = 3
+    private lazy var sfuMapper = SySfuEventMapper(sink: self)
+    private var sfuLocalLevel: Double?
+    private var sfuRemoteLevels: [String: Double] = [:]
     
     // 多人语聊（Mesh）：每个远端用户一条 PeerConnection（key=remoteUid）
     private var offerSentByUid: Set<String> = []
@@ -210,10 +221,18 @@ internal class SyRtcEngineImpl {
             eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "channelId/uid/token 不能为空")
             return
         }
+        // token 可以是纯 Token，也可以是 meta=true 的整段 JSON（含 sfuUrl/sfuToken 时媒体走 LiveKit）。
+        let creds = SyJoinCredentials.parse(token)
+        let token = creds.token
         currentChannelId = channelId
         currentUid = uid
         currentToken = token
         pendingRejoin = false
+        kickedOnce.reset()
+        lastLocalServerMute = nil
+        sfuReconnectAttempts = 0
+        sfuMode = creds.sfu != nil
+        if creds.canPublish == false { canPublishMedia = false }
         scheduleTokenPrivilegeWatch(token: token)
         offerSentByUid.removeAll()
         remoteSdpSetByUid.removeAll()
@@ -229,6 +248,10 @@ internal class SyRtcEngineImpl {
         openSignaling(channelId: channelId, uid: uid, token: token)
         startQualityMonitor()
 
+        if let sfu = creds.sfu {
+            startSfuSession(sfu, uid: uid)
+            return
+        }
         // 本地音频轨道（多人：后续每条 PC 都 addTrack）
         if let factory = peerConnectionFactory, localAudioTrack == nil {
             let audioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
@@ -246,6 +269,11 @@ internal class SyRtcEngineImpl {
         reconnectAttempt = 0
         resetIceRecovery()
         stopQualityMonitor()
+        sfuSession?.disconnect()
+        sfuSession = nil
+        sfuMode = false
+        sfuLocalLevel = nil
+        sfuRemoteLevels.removeAll()
 
         peerConnections.values.forEach { $0.close() }
         peerConnections.removeAll()
@@ -277,6 +305,71 @@ internal class SyRtcEngineImpl {
         eventHandler?.onConnectionStateChanged(state: "disconnected", reason: "leave")
     }
 
+    // MARK: - LiveKit (SFU)
+
+    private func wantsLocalVideo() -> Bool {
+        isVideoEnabled && (isLocalVideoEnabled || isPreviewing) && !localVideoMuted && canPublishMedia
+    }
+
+    /// onKicked 只回调一次：LiveKit 移出房间与信令 kicked / user-kicked 可能同时到达。
+    @discardableResult
+    private func notifyKicked(channelId: String, reason: String) -> Bool {
+        guard kickedOnce.tryFire() else { return false }
+        eventHandler?.onKicked(channelId: channelId, reason: reason)
+        return true
+    }
+
+    /// 本端被服务端静音/解除：只在状态变化时回调；SDK 不会自动恢复麦克风。
+    private func notifyLocalServerMute(_ muted: Bool) {
+        if lastLocalServerMute == muted { return }
+        lastLocalServerMute = muted
+        eventHandler?.onServerMuteAudio(uid: currentUid ?? "", muted: muted)
+    }
+
+    private func startSfuSession(_ sfu: SySfuJoinInfo, uid: String) {
+        let publish = canPublishMedia
+        let camera = wantsLocalVideo()
+        // 预览用的是 WebRTC-SDK 摄像头；进房后摄像头交给 LiveKit。
+        if isPreviewing, let capturer = videoCapturer as? RTCCameraVideoCapturer {
+            capturer.stopCapture()
+            videoCapturer = nil
+            localVideoTrack?.isEnabled = false
+            localVideoTrack = nil
+            cameraVideoSource = nil
+        }
+        sfuMapper.localAudioMuteRequested = localAudioMuted || !publish
+        let session = SyLiveKitMediaSession(localUid: uid, mapper: sfuMapper, callbacks: self)
+        sfuSession = session
+#if canImport(UIKit)
+        DispatchQueue.main.async { [weak self, weak session] in
+            guard let self, let session, self.sfuSession === session else { return }
+            if let v = self.localContainerView { session.attachLocal(v) }
+            for (u, v) in self.remoteContainerViews { session.attachRemote(uid: u, container: v) }
+        }
+#endif
+        print("媒体走 LiveKit: room=\(sfu.room) identity=\(sfu.identity) publish=\(publish) camera=\(camera)")
+        session.connect(sfu, publishMic: publish && !localAudioMuted, publishCamera: camera)
+    }
+
+    /// LiveKit 非踢人原因断开：用当前 sfuToken 重连，最多 3 次（1s/2s/4s）。
+    private func onSfuLost(_ detail: String) {
+        guard let session = sfuSession, currentChannelId != nil else { return }
+        sfuReconnectAttempts += 1
+        if sfuReconnectAttempts > Self.sfuMaxReconnect {
+            eventHandler?.onReconnectFailed(reason: "sfu")
+            eventHandler?.onConnectionStateChanged(state: "failed", reason: "sfu_lost")
+            eventHandler?.onError(code: SyRtcErrorCode.reconnectFailed, message: "媒体连接失败: \(detail)")
+            return
+        }
+        let delayMs = 1000 << (sfuReconnectAttempts - 1)
+        eventHandler?.onReconnecting(reason: "sfu", attempt: sfuReconnectAttempts, maxAttempts: Self.sfuMaxReconnect, delayMs: delayMs)
+        eventHandler?.onConnectionStateChanged(state: "reconnecting", reason: "sfu_lost")
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self, weak session] in
+            guard let self, let session, self.sfuSession === session, self.currentChannelId != nil else { return }
+            session.reconnect()
+        }
+    }
+
     private func createPeerConnection(remoteUid: String) -> RTCPeerConnection? {
         guard let factory = peerConnectionFactory else { return nil }
         let config = RTCConfiguration()
@@ -302,12 +395,14 @@ internal class SyRtcEngineImpl {
         switch type {
         case "kicked":
             let reason = (data["reason"] as? String) ?? "kicked"
-            eventHandler?.onKicked(channelId: channelId, reason: reason)
-            eventHandler?.onError(code: SyRtcErrorCode.forKicked(data), message: "kicked: \(reason)")
+            if notifyKicked(channelId: channelId, reason: reason) {
+                eventHandler?.onError(code: SyRtcErrorCode.forKicked(data), message: "kicked: \(reason)")
+            }
             leave()
         case "user-kicked":
             if let kickedUid = data["uid"] as? String {
                 if kickedUid == currentUid {
+                    _ = notifyKicked(channelId: channelId, reason: (data["reason"] as? String) ?? "user-kicked")
                     leave()
                 } else {
                     eventHandler?.onUserOffline(uid: kickedUid, reason: "kicked")
@@ -316,9 +411,12 @@ internal class SyRtcEngineImpl {
         case "mute-audio", "unmute-audio":
             let target = (data["uid"] as? String) ?? ""
             let muted = type == "mute-audio" || (data["mutedAudio"] as? Bool) == true
-            eventHandler?.onServerMuteAudio(uid: target, muted: muted)
             if target == currentUid {
+                notifyLocalServerMute(muted)
                 localAudioTrack?.isEnabled = !muted
+                if muted { sfuSession?.setMicrophoneEnabled(false) }
+            } else {
+                eventHandler?.onServerMuteAudio(uid: target, muted: muted)
             }
         // Go hub acks join with "joined"/"resumed" + data.peers; legacy hub sent "user-list" + data.users.
         case "user-list", "joined", "resumed":
@@ -349,6 +447,7 @@ internal class SyRtcEngineImpl {
                 if !rejoining || !known {
                     eventHandler?.onUserJoined(uid: u, elapsed: 0)
                 }
+                if sfuMode { continue }
                 if peerConnections[u] == nil { _ = createPeerConnection(remoteUid: u) }
                 if !known {
                     republishSideInfo()
@@ -358,6 +457,7 @@ internal class SyRtcEngineImpl {
                 }
             }
         case "offer":
+            guard !sfuMode else { return }
             guard let from = data["uid"] as? String, let sdp = data["sdp"] as? String else { return }
             let pc = peerConnections[from] ?? createPeerConnection(remoteUid: from)
             guard let pcUnwrapped = pc else { return }
@@ -379,6 +479,7 @@ internal class SyRtcEngineImpl {
                 }
             }
         case "answer":
+            guard !sfuMode else { return }
             guard let from = data["uid"] as? String, let sdp = data["sdp"] as? String else { return }
             guard let pc = peerConnections[from] else { return }
             let remote = RTCSessionDescription(type: .answer, sdp: sdp)
@@ -387,6 +488,7 @@ internal class SyRtcEngineImpl {
                 self?.flushPendingRemoteIce(from: from)
             })
         case "ice-candidate":
+            guard !sfuMode else { return }
             guard let from = data["uid"] as? String, let cand = data["candidate"] as? String else { return }
             let mline = (data["sdpMLineIndex"] as? NSNumber)?.int32Value ?? 0
             let mid = (data["sdpMid"] as? String) ?? ""
@@ -399,7 +501,7 @@ internal class SyRtcEngineImpl {
         case "user-joined":
             if let uid = data["uid"] as? String {
                 eventHandler?.onUserJoined(uid: uid, elapsed: 0)
-                if let localUid = currentUid, uid != localUid {
+                if !sfuMode, let localUid = currentUid, uid != localUid {
                     let known = peerConnections[uid] != nil
                     if peerConnections[uid] == nil { _ = createPeerConnection(remoteUid: uid) }
                     if !known { republishSideInfo() }
@@ -666,6 +768,11 @@ internal class SyRtcEngineImpl {
         localAudioTrack?.isEnabled = canPublishMedia && !localAudioMuted
         localVideoTrack?.isEnabled = canPublishMedia && !localVideoMuted
         screenVideoTrack?.isEnabled = canPublishMedia
+        if sfuMode {
+            sfuMapper.localAudioMuteRequested = localAudioMuted || !canPublishMedia
+            sfuSession?.setMicrophoneEnabled(canPublishMedia && !localAudioMuted && !sfuMapper.isServerMuted)
+            sfuSession?.setCameraEnabled(wantsLocalVideo())
+        }
         if currentChannelId != nil {
             signalingClient?.sendUserMedia(
                 audioMuted: !canPublishMedia || localAudioMuted,
@@ -709,6 +816,10 @@ internal class SyRtcEngineImpl {
 
     func enableLocalAudio(_ enabled: Bool) {
         localAudioTrack?.isEnabled = enabled
+        if sfuMode {
+            sfuMapper.localAudioMuteRequested = !enabled || localAudioMuted || !canPublishMedia
+            sfuSession?.setMicrophoneEnabled(enabled && canPublishMedia && !localAudioMuted)
+        }
         if enabled {
             guard audioEngineReady, let engine = audioEngine else {
                 print("音频引擎未就绪，跳过启动")
@@ -763,6 +874,10 @@ internal class SyRtcEngineImpl {
     func muteLocalAudio(_ muted: Bool) {
         localAudioMuted = muted
         localAudioTrack?.isEnabled = !muted && canPublishMedia
+        if sfuMode {
+            sfuMapper.localAudioMuteRequested = muted || !canPublishMedia
+            sfuSession?.setMicrophoneEnabled(!muted && canPublishMedia)
+        }
         eventHandler?.onLocalAudioStateChanged(state: muted ? "stopped" : "recording", error: "ok")
         signalingClient?.sendUserMedia(audioMuted: muted, videoMuted: nil)
     }
@@ -812,11 +927,15 @@ internal class SyRtcEngineImpl {
     // MARK: - Token刷新
     
     func renewToken(_ token: String) {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        let rawToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawToken.isEmpty else {
             eventHandler?.onError(code: SyRtcErrorCode.invalidArgument, message: "token 不能为空")
             return
         }
+        // 与 join 相同：可以传 meta=true 的整段 JSON，新的 sfuToken 留给 LiveKit 下次重连使用。
+        let creds = SyJoinCredentials.parse(rawToken)
+        let trimmed = creds.token
+        if let sfu = creds.sfu { sfuSession?.updateCredentials(sfu) }
         currentToken = trimmed
         scheduleTokenPrivilegeWatch(token: trimmed)
         guard let channelId = currentChannelId, let uid = currentUid else {
@@ -1048,6 +1167,7 @@ internal class SyRtcEngineImpl {
     
     func enableLocalVideo(_ enabled: Bool) {
         isLocalVideoEnabled = enabled
+        if sfuMode { sfuSession?.setCameraEnabled(wantsLocalVideo()) }
         print("启用本地视频: \(enabled)")
     }
     
@@ -1180,6 +1300,13 @@ internal class SyRtcEngineImpl {
         if !isVideoEnabled {
             enableVideo()
         }
+        if sfuMode {
+            // 进房后摄像头由 LiveKit 采集、发布。
+            isPreviewing = true
+            sfuSession?.setCameraEnabled(wantsLocalVideo())
+            eventHandler?.onLocalVideoStateChanged(state: "capturing", error: "ok")
+            return
+        }
         if isPreviewing, videoCapturer is RTCCameraVideoCapturer {
             return
         }
@@ -1203,6 +1330,12 @@ internal class SyRtcEngineImpl {
     
     func stopPreview() {
         if !isPreviewing && !customVideoCaptureEnabled {
+            return
+        }
+        if sfuMode && videoCapturer == nil {
+            isPreviewing = false
+            sfuSession?.setCameraEnabled(wantsLocalVideo())
+            eventHandler?.onLocalVideoStateChanged(state: "stopped", error: "ok")
             return
         }
         isPreviewing = false
@@ -1289,6 +1422,7 @@ internal class SyRtcEngineImpl {
         videoMutedStates["local"] = muted
         localVideoTrack?.isEnabled = !muted && canPublishMedia
         screenVideoTrack?.isEnabled = !muted && canPublishMedia
+        if sfuMode { sfuSession?.setCameraEnabled(wantsLocalVideo()) }
         eventHandler?.onLocalVideoStateChanged(state: muted ? "stopped" : "capturing", error: "ok")
         signalingClient?.sendUserMedia(audioMuted: nil, videoMuted: muted)
     }
@@ -1321,6 +1455,10 @@ internal class SyRtcEngineImpl {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.localContainerView = view
+            if let session = self.sfuSession {
+                session.attachLocal(view)
+                return
+            }
             self.localRenderer?.removeFromSuperview()
             let renderer = RTCMTLVideoView(frame: view.bounds)
             renderer.videoContentMode = .scaleAspectFill
@@ -1338,6 +1476,10 @@ internal class SyRtcEngineImpl {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.remoteContainerViews[uid] = view
+            if let session = self.sfuSession {
+                session.attachRemote(uid: uid, container: view)
+                return
+            }
             self.remoteRenderers[uid]?.removeFromSuperview()
             let renderer = RTCMTLVideoView(frame: view.bounds)
             renderer.videoContentMode = .scaleAspectFill
@@ -2360,8 +2502,19 @@ extension SyRtcEngineImpl {
 
     fileprivate func collectStatistics(reportVolume: Bool, reportQuality: Bool) {
         guard currentChannelId != nil else { return }
-        let pcs = peerConnections.filter { $0.key != "default" }
         let localUid = currentUid ?? "local"
+        if sfuMode {
+            // 网络质量来自 LiveKit connection quality（见 sfuNetworkQuality）；音量来自 LiveKit audio level。
+            if reportVolume && volumeIntervalMs > 0 {
+                var speakers = [volumeInfo(uid: localUid, level: localAudioMuted ? 0 : (sfuLocalLevel ?? 0))]
+                for (u, level) in sfuRemoteLevels.sorted(by: { $0.key < $1.key }) {
+                    speakers.append(volumeInfo(uid: u, level: level))
+                }
+                eventHandler?.onVolumeIndication(speakers: speakers)
+            }
+            return
+        }
+        let pcs = peerConnections.filter { $0.key != "default" }
         if pcs.isEmpty {
             if reportQuality {
                 eventHandler?.onNetworkQuality(uid: localUid, txQuality: "unknown", rxQuality: "unknown")
@@ -2785,5 +2938,57 @@ extension SyRtcEngineImpl {
             return UIImage(cgImage: cgImage)
         }
         return nil
+    }
+}
+
+// MARK: - LiveKit events -> SY callbacks
+
+extension SyRtcEngineImpl: SySfuSink, SyLiveKitMediaSessionCallbacks {
+    // 远端静音回调仍以信令 user-media 为准（与 Android 相同），避免重复回调。
+    func sfuRemoteAudioMuted(uid: String, muted: Bool) {}
+    func sfuRemoteVideoMuted(uid: String, muted: Bool) {}
+
+    func sfuServerMutedLocalAudio(_ muted: Bool) { notifyLocalServerMute(muted) }
+
+    func sfuKicked(reason: String) {
+        guard let ch = currentChannelId else { return }
+        notifyKicked(channelId: ch, reason: reason)
+        leave()
+    }
+
+    func sfuMediaLost(detail: String) { onSfuLost(detail) }
+
+    func sfuNetworkQuality(uid: String, quality: String) {
+        eventHandler?.onNetworkQuality(uid: uid, txQuality: quality, rxQuality: quality)
+    }
+
+    func sfuLevels(local: Double?, remote: [String: Double]) {
+        if let local { sfuLocalLevel = local }
+        sfuRemoteLevels = remote
+    }
+
+    func sfuReconnecting() {
+        eventHandler?.onReconnecting(reason: "sfu", attempt: 1, maxAttempts: 1, delayMs: 0)
+        eventHandler?.onConnectionStateChanged(state: "reconnecting", reason: "sfu_reconnecting")
+    }
+
+    func sfuReconnected() {
+        eventHandler?.onReconnected(reason: "sfu")
+        eventHandler?.onConnectionStateChanged(state: "connected", reason: "sfu_reconnected")
+    }
+
+    func sfuConnected(reconnect: Bool) {
+        sfuReconnectAttempts = 0
+        if reconnect {
+            eventHandler?.onReconnected(reason: "sfu")
+            eventHandler?.onConnectionStateChanged(state: "connected", reason: "sfu_reconnected")
+        }
+    }
+
+    func sfuConnectFailed(_ error: Error) { onSfuLost("\(error)") }
+
+    func sfuFirstRemoteVideo(uid: String) {
+        let elapsed = Int((Date().timeIntervalSince(joinStartTime ?? Date())) * 1000)
+        eventHandler?.onRemoteVideoStateChanged(uid: uid, state: "decoding", reason: "sfu_track_subscribed", elapsed: max(0, elapsed))
     }
 }
