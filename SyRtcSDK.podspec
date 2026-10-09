@@ -1,11 +1,12 @@
 Pod::Spec.new do |s|
   s.name             = 'SyRtcSDK'
-  s.version          = '3.2.2'
+  s.version          = '3.3.0'
   s.summary          = 'SY RTC iOS SDK for real-time audio and video.'
   s.description      = <<-DESC
 SY RTC iOS SDK is the source distribution of the SY real-time audio and video engine.
-Integrate it with CocoaPods by version (`pod 'SyRtcSDK', '~> 3.2.2'`) or with Swift Package Manager by git URL and version tag.
-The pod ships Swift sources and depends on WebRTC-SDK; customers do not download or unzip an SDK framework.
+Integrate it with CocoaPods by version (`pod 'SyRtcSDK', '~> 3.3.0'`) or with Swift Package Manager by git URL and version tag.
+The pod ships Swift sources and depends on WebRTC-SDK and LiveKitClient (LiveKit media plane).
+LiveKitClient (2.15.x for CocoaPods; the 2.17.0 pod fails to build) is not on Trunk: add `source 'https://github.com/livekit/podspecs.git'` before the CDN source in your Podfile.
                        DESC
   s.homepage         = 'https://github.com/carlcy/sy-rtc-ios-sdk'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
@@ -19,5 +20,5 @@ The pod ships Swift sources and depends on WebRTC-SDK; customers do not download
   # 与 Android webrtc-sdk 125.6422.07、Package.swift binaryTarget 同一版本。固定到 .07：
   # 125.6422.09 改了 RTCPeerConnectionFactory 带 APM 的 init（多了 audioDeviceModuleType），录音取本端 PCM 依赖该 init。
   s.dependency 'WebRTC-SDK', '125.6422.07'
-  s.dependency 'LiveKitClient', '~> 2.17'
+  s.dependency 'LiveKitClient', '~> 2.15.1'
 end

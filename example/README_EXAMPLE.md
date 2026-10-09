@@ -7,7 +7,7 @@
 依赖与客户相同，是版本号而不是本地路径：
 
 ```ruby
-pod 'SyRtcSDK', '~> 3.2.2'
+pod 'SyRtcSDK', '~> 3.3.0'
 ```
 
 ```bash
@@ -16,7 +16,7 @@ pod install
 open SyRtcSDKExample.xcworkspace
 ```
 
-本机 CDN 缓存未更新时，可临时改用 `pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.2'`。不要下载 zip。
+本机 CDN 缓存未更新时，可临时改用 `pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.3.0'`。不要下载 zip。
 
 命令行构建（模拟器）：
 

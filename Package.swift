@@ -2,7 +2,7 @@
 import PackageDescription
 
 // 源码分发（不是预编译 SyRtcSDK.xcframework）。
-// 版本由 git tag 决定：打 `v3.2.2` 后，客户写 `.package(url:from: "3.2.2")`。
+// 版本由 git tag 决定：打 `v3.3.0` 后，客户写 `.package(url:from: "3.3.0")`。
 // WebRTC 与 CocoaPods 的 WebRTC-SDK 125.6422.07 使用同一份 xcframework zip，
 // 避免再依赖另一套版本号（例如 stasel/WebRTC 141）导致 API 对不齐。
 let package = Package(

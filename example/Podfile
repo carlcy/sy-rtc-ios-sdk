@@ -1,3 +1,4 @@
+source 'https://github.com/livekit/podspecs.git'
 source 'https://cdn.cocoapods.org/'
 
 platform :ios, '15.0'
@@ -5,10 +6,10 @@ use_frameworks!
 
 target 'SyRtcSDKExample' do
   # 与客户集成方式一致：库名 + 版本。不要用 :path，也不要下载 / 解压 xcframework。
-  # SyRtcSDK 3.2.2 已在 CocoaPods Trunk，直接 `pod install`。
+  # SyRtcSDK 3.3.0 需要上面的 LiveKit spec 源，然后 `pod install`。
   # 本机 CDN 缓存未更新时，可临时改用同一版本的 git tag（仍然是版本，不是本地路径）：
-  # pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.2.2'
-  pod 'SyRtcSDK', '~> 3.2.2'
+  # pod 'SyRtcSDK', :git => 'https://github.com/carlcy/sy-rtc-ios-sdk.git', :tag => 'v3.3.0'
+  pod 'SyRtcSDK', '~> 3.3.0'
 end
 
 post_install do |installer|

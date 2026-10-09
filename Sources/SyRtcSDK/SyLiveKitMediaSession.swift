@@ -1,5 +1,10 @@
 import Foundation
+// SPM product module is `LiveKit`; the CocoaPods pod `LiveKitClient` builds module `LiveKitClient`.
+#if canImport(LiveKitClient)
+import LiveKitClient
+#else
 import LiveKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif

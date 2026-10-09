@@ -1,7 +1,13 @@
 # SY RTC iOS SDK 更新日志
 
-## Unreleased
+## 3.3.0
 
+- LiveKit 媒体面：`join` / `renewToken` 除了普通 Token，也接受 `POST /api/server/rtc/token`（`meta=true`）返回的整段 JSON。`mediaWired=true` 且带 `sfuUrl` / `sfuToken` 时，麦克风、摄像头、远端音视频走 LiveKit（LiveKit Swift SDK 2.17，WebRTC 带 `LiveKitWebRTC` 前缀，不与 WebRTC-SDK 冲突），否则仍是 P2P，调用方式不变。新增 `SyJoinCredentials`。
+- LiveKit 事件映射：被服务端移出 / 房间删除 / 重复身份 → `onKicked`，信令 kicked 与 LiveKit removed 同时到达时每次进房只回调一次；服务端静音本端 → `onServerMuteAudio(本端uid, true)`（SDK 不自动开麦）；网络质量与音量来自 LiveKit；非踢人断开重连 3 次，原因 `sfu_lost` / `sfu_reconnecting` / `sfu_reconnected`。
+- 修：对接 Go 后端时 `onJoinChannelSuccess` 不回调（信令 `joined` / `resumed` 的 `data.peers` 按 `user-list` 处理）。
+- **CocoaPods 需要 LiveKit 的 spec 源**：CocoaPods 依赖 `LiveKitClient` `~> 2.15.1`（LiveKit 2.17.0 的 pod 编译失败：`pb.h` 找不到；SPM 仍用 2.17），它不在 Trunk，`Podfile` 顶部加 `source 'https://github.com/livekit/podspecs.git'`（放在 `source 'https://cdn.cocoapods.org/'` 之前）。SPM 不需要。
+- 只在 P2P 下可用：屏幕共享、自定义视频源与美颜、数据流、SEI、频道内录音、伴奏混入上行。
+- 测试：可选的 LiveKit E2E（`TEST_RUNNER_SFU_META`），不设置时跳过。
 - 音频路由：`setAudioRoute(.bluetooth / .headset)` 在设备已连接时可切（首选输入换到 HFP / 耳机麦克风），未连接时回调 `onError(audioRoute)`；新增 `availableAudioRoutes()`；`enumeratePlaybackDevices` / `setPlaybackDevice` 多出 `headset` / `bluetooth`（与 Android 一致）；`onAudioRoutingChanged` 只在路由变化时回调（插拔耳机、蓝牙连断、切扬声器）；`setDefaultAudioRouteToSpeakerphone` 不再丢掉蓝牙选项。
 - LiveKit：丢弃 uid 为空的网络质量回调。
 
