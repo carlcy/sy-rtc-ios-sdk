@@ -19,4 +19,5 @@ The pod ships Swift sources and depends on WebRTC-SDK; customers do not download
   # 与 Android webrtc-sdk 125.6422.07、Package.swift binaryTarget 同一版本。固定到 .07：
   # 125.6422.09 改了 RTCPeerConnectionFactory 带 APM 的 init（多了 audioDeviceModuleType），录音取本端 PCM 依赖该 init。
   s.dependency 'WebRTC-SDK', '125.6422.07'
+  s.dependency 'LiveKitClient', '~> 2.17'
 end

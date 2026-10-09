@@ -16,10 +16,14 @@ let package = Package(
             targets: ["SyRtcSDK"]
         ),
     ],
+    dependencies: [
+        // LiveKit SFU media plane (prefixed LiveKitWebRTC, no clash with WebRTC-SDK below).
+        .package(url: "https://github.com/livekit/client-sdk-swift.git", from: "2.17.0"),
+    ],
     targets: [
         .target(
             name: "SyRtcSDK",
-            dependencies: ["WebRTC"],
+            dependencies: ["WebRTC", .product(name: "LiveKit", package: "client-sdk-swift")],
             path: "Sources/SyRtcSDK",
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
