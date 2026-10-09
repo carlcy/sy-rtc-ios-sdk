@@ -320,10 +320,12 @@ internal class SyRtcEngineImpl {
             if target == currentUid {
                 localAudioTrack?.isEnabled = !muted
             }
-        case "user-list":
+        // Go hub acks join with "joined"/"resumed" + data.peers; legacy hub sent "user-list" + data.users.
+        case "user-list", "joined", "resumed":
             guard let localUid = currentUid, let chId = currentChannelId else { return }
             // 服务端 data.users 可能是 [String] 或 JSON 反序列化后的 [Any]，需兼容
-            let users: [String] = (data["users"] as? [String]) ?? (data["users"] as? [Any])?.compactMap { $0 as? String } ?? []
+            let rawUsers = data["users"] ?? data["peers"]
+            let users: [String] = (rawUsers as? [String]) ?? (rawUsers as? [Any])?.compactMap { $0 as? String } ?? []
             let rejoining = pendingRejoin
             reconnectAttempt = 0
             connectionState = "connected"
