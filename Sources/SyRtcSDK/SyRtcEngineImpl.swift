@@ -18,6 +18,7 @@ internal class SyRtcEngineImpl {
     weak var eventHandler: SyRtcEventHandler?
     private var audioEngine: AVAudioEngine?
     private var speakerphoneEnabled = false
+    private let audioRouteDeduper = SyRtcAudioRouteDeduper()
     private var isVideoEnabled = false
     private var isLocalVideoEnabled = false
     private var audioMixingState: AudioMixingState = .stopped
@@ -734,11 +735,39 @@ internal class SyRtcEngineImpl {
         case .speaker:
             setEnableSpeakerphone(true)
         case .earpiece:
+            // 蓝牙 HFP 连着时，把首选输入换回内置麦克风，播放才会回到听筒（有线耳机插着时系统仍走耳机）。
+            preferInput(for: .earpiece)
             setEnableSpeakerphone(false)
-        case .headset, .bluetooth, .unknown:
-            eventHandler?.onError(code: SyRtcErrorCode.audioRoute, message: "iOS 只能在扬声器和听筒之间切换，蓝牙和有线耳机由系统路由决定")
+        case .headset, .bluetooth:
+            guard availableAudioRoutes().contains(route) else {
+                eventHandler?.onError(code: SyRtcErrorCode.audioRoute,
+                                      message: route == .bluetooth ? "未连接蓝牙耳机" : "未连接有线耳机")
+                publishCurrentAudioRoute()
+                return
+            }
+            preferInput(for: route)
+            setEnableSpeakerphone(false)
+        case .unknown:
+            eventHandler?.onError(code: SyRtcErrorCode.audioRoute, message: "未知的音频路由")
             publishCurrentAudioRoute()
         }
+    }
+
+    /// 当前可切换的路由：扬声器总在；听筒仅 iPhone；有线耳机 / 蓝牙在设备连接时出现。
+    func availableAudioRoutes() -> [SyRtcAudioRoute] {
+        let session = AVAudioSession.sharedInstance()
+        return SyRtcAudioRouting.available(
+            inputs: (session.availableInputs ?? []).map(\.portType),
+            outputs: session.currentRoute.outputs.map(\.portType),
+            hasEarpiece: UIDevice.current.userInterfaceIdiom == .phone)
+    }
+
+    private func preferInput(for route: SyRtcAudioRoute) {
+        let session = AVAudioSession.sharedInstance()
+        let inputs = session.availableInputs ?? []
+        guard let type = SyRtcAudioRouting.preferredInput(for: route, inputs: inputs.map(\.portType)),
+              let port = inputs.first(where: { $0.portType == type }) else { return }
+        do { try session.setPreferredInput(port) } catch { print("设置首选输入失败: \(error)") }
     }
 
     func getAudioRoute() -> SyRtcAudioRoute {
@@ -748,7 +777,7 @@ internal class SyRtcEngineImpl {
     func setDefaultAudioRouteToSpeakerphone(_ enabled: Bool) {
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: enabled ? [.defaultToSpeaker] : [])
+            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: enabled ? [.defaultToSpeaker, .allowBluetooth] : [.allowBluetooth])
             try audioSession.setActive(true)
             speakerphoneEnabled = enabled
             publishCurrentAudioRoute()
@@ -1100,11 +1129,11 @@ internal class SyRtcEngineImpl {
     }
     
     func enumeratePlaybackDevices() -> [AudioDeviceInfo] {
-        // 只有这两项会真正改 AVAudioSession。蓝牙和有线耳机由系统路由决定，见 onAudioRoutingChanged。
-        return [
-            AudioDeviceInfo(deviceId: "speaker", deviceName: "扬声器"),
-            AudioDeviceInfo(deviceId: "earpiece", deviceName: "听筒")
-        ]
+        // 与 Android 一致：连上有线耳机 / 蓝牙耳机时多出 "headset" / "bluetooth"。
+        let names: [SyRtcAudioRoute: String] = [.speaker: "扬声器", .earpiece: "听筒", .headset: "有线耳机", .bluetooth: "蓝牙耳机"]
+        return availableAudioRoutes().compactMap { r in
+            SyRtcAudioRouting.deviceId(r).map { AudioDeviceInfo(deviceId: $0, deviceName: names[r] ?? $0) }
+        }
     }
     
     func setRecordingDevice(_ deviceId: String) -> Int {
@@ -1122,16 +1151,10 @@ internal class SyRtcEngineImpl {
     }
     
     func setPlaybackDevice(_ deviceId: String) -> Int {
-        switch deviceId {
-        case "speaker":
-            setEnableSpeakerphone(true)
-            return 0
-        case "earpiece":
-            setEnableSpeakerphone(false)
-            return 0
-        default:
-            return -1
-        }
+        guard let route = SyRtcAudioRouting.route(deviceId: deviceId),
+              availableAudioRoutes().contains(route) else { return -1 }
+        setAudioRoute(route)
+        return 0
     }
     
     func getRecordingDeviceVolume() -> Int {
@@ -2617,26 +2640,13 @@ extension SyRtcEngineImpl {
     fileprivate func publishCurrentAudioRoute() {
         let route = currentAudioRoute()
         speakerphoneEnabled = route == .speaker
+        // 只在路由真正变化时回调（插拔耳机、蓝牙连断、切扬声器），与 Android 一致。
+        guard audioRouteDeduper.shouldPublish(route) else { return }
         eventHandler?.onAudioRoutingChanged(routing: route.rawValue)
     }
 
     fileprivate func currentAudioRoute() -> SyRtcAudioRoute {
-        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-        for port in outputs {
-            switch port.portType {
-            case .builtInSpeaker:
-                return .speaker
-            case .builtInReceiver:
-                return .earpiece
-            case .headphones, .headsetMic:
-                return .headset
-            case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
-                return .bluetooth
-            default:
-                continue
-            }
-        }
-        return .unknown
+        SyRtcAudioRouting.route(outputs: AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType))
     }
 }
 

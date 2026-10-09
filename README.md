@@ -315,7 +315,7 @@ if let serviceError = error as? SyRtcServiceError {
 | 1005 | `camera` | 摄像头不可用或视频源未就绪 |
 | 1006 | `screenShare` | 屏幕共享失败 |
 | 1007 | `customCapture` | 自定义采集用法错误或视频源未就绪 |
-| 1009 | `audioRoute` | 音频路由不支持（iOS 只能在扬声器和听筒之间切换）或设置失败 |
+| 1009 | `audioRoute` | 音频路由不可用（例如未连接蓝牙 / 有线耳机时切过去）或设置失败 |
 | 403 | `forbidden` | 服务端拒绝入房：在踢出名单、房间锁定、不在白名单 |
 | 4031 / 4032 / 4033 | `credentialSuspended` / `Revoked` / `Expired` | AppId 访问凭证被暂停 / 吊销 / 过期；服务端断开信令，SDK 回调 `onKicked` 后以此码回调 `onError` |
 

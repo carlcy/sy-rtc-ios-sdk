@@ -133,9 +133,15 @@ public class SyRtcEngine {
         return impl?.isSpeakerphoneEnabled() ?? false
     }
 
-    /// 只支持 `.speaker` 与 `.earpiece`。蓝牙和有线耳机由系统路由决定。
+    /// 切换播放路由。`.headset` / `.bluetooth` 需要设备已连接（见 `availableAudioRoutes()`），
+    /// 否则回调 `onError(audioRoute)`。实际路由以 `onAudioRoutingChanged` 为准。
     public func setAudioRoute(_ route: SyRtcAudioRoute) {
         impl?.setAudioRoute(route)
+    }
+
+    /// 当前可切换的路由：扬声器；iPhone 上的听筒；已连接的有线耳机、蓝牙耳机。
+    public func availableAudioRoutes() -> [SyRtcAudioRoute] {
+        impl?.availableAudioRoutes() ?? []
     }
 
     public func getAudioRoute() -> SyRtcAudioRoute {

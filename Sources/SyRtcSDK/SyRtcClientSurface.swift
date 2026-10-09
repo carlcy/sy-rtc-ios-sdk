@@ -3,7 +3,8 @@ import CoreVideo
 import CoreMedia
 import ReplayKit
 
-/// 本机播放路由。只能主动切到扬声器或听筒；蓝牙和有线耳机由系统决定，通过 `onAudioRoutingChanged` 上报。
+/// 本机播放路由。扬声器、听筒随时可切；有线耳机、蓝牙耳机连接后可切（`availableAudioRoutes()`）。
+/// 插拔耳机、蓝牙连断等系统路由变化通过 `onAudioRoutingChanged` 上报（只在路由变化时回调）。
 ///
 /// 数值不是 ZEGO `ZegoAudioRoute` 的原枚举序，见发布说明里的对照表。
 public enum SyRtcAudioRoute: Int {

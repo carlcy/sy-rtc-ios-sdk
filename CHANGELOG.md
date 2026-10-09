@@ -1,5 +1,10 @@
 # SY RTC iOS SDK 更新日志
 
+## Unreleased
+
+- 音频路由：`setAudioRoute(.bluetooth / .headset)` 在设备已连接时可切（首选输入换到 HFP / 耳机麦克风），未连接时回调 `onError(audioRoute)`；新增 `availableAudioRoutes()`；`enumeratePlaybackDevices` / `setPlaybackDevice` 多出 `headset` / `bluetooth`（与 Android 一致）；`onAudioRoutingChanged` 只在路由变化时回调（插拔耳机、蓝牙连断、切扬声器）；`setDefaultAudioRouteToSpeakerphone` 不再丢掉蓝牙选项。
+- LiveKit：丢弃 uid 为空的网络质量回调。
+
 ## 3.2.2
 
 - 版本对齐发布：Android、iOS、Flutter 统一为 3.2.2。iOS 代码与 3.2.1 相同，仅 `SyRtcSDKVersion.current` / podspec / `VERSION` 改为 3.2.2。
