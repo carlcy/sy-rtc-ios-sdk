@@ -149,6 +149,27 @@ engine.release()
 engine.setClientRole(.host)     // 或 .audience / .publisher / .subscriber
 ```
 
+### 5. 媒体服务器（LiveKit）
+
+服务端配置了 LiveKit 节点时，拉 Token 带 `meta: true`，把返回的 JSON 原样交给 `join`：
+
+```swift
+rooms.fetchToken(channelId: channelId, uid: uid, meta: true) { result in
+    if case .success(let metaJson) = result {
+        engine.join(channelId: channelId, uid: uid, token: metaJson)
+    }
+}
+```
+
+- JSON 里 `mediaWired=true` 且有 `sfuUrl` / `sfuToken` 时，麦克风、摄像头、远端音视频都走 LiveKit（`LiveKitClient`）；没有时自动用 P2P，调用方式不变。
+- 续期同样带 `meta: true`，把 JSON 交给 `engine.renewToken`；新的 `sfuToken` 用于之后的媒体重连。
+- 服务端踢人（LiveKit removed by server）和信令 `kicked` 只回调一次 `onKicked`。
+- 服务端静音本端时回调 `onServerMuteAudio(本端uid, true)`，SDK 不会自动打开麦克风。
+- `audience` 的 `sfuToken` 没有发布权限。切到可发布角色要重新取 Token 再 `renewToken`。
+- 网络质量取自 LiveKit 的连接质量（`excellent` / `good` / `poor` / `down`），音量取自 LiveKit 音频电平。媒体断开（非踢人）会用当前 `sfuToken` 重连 3 次（1s / 2s / 4s）。
+- 目前只在 P2P 下可用：屏幕共享、自定义视频源与美颜处理、`createDataStream`、SEI、频道内录音、伴奏混入上行。
+- CocoaPods：`LiveKitClient` 新版本不在 Trunk，`Podfile` 需要加 `source 'https://github.com/livekit/podspecs.git'`（放在 CDN 源之前）。LiveKit 已宣布 CocoaPods 2027 年停止更新，推荐用 Swift Package Manager。
+
 ## 续期 Token
 
 Token 快过期时 SDK 会回调 `onTokenPrivilegeWillExpire`（提前 30 秒），到期回调 `onRequestToken`。过期时间取自 Token payload 的 `expireAt`（服务端 Token 形如 `base64url(payload).签名`；也兼容 JWT 的 `exp`），`join` 和 `renewToken` 后重新计时，Android 行为相同。3.2.0 及之前只按三段式 JWT 解析，服务端签发的两段式 Token 实际从不提醒。服务端也会推送 `token-privilege-will-expire` / `token-expired`（带 `data.expireAt`）；本地定时器与服务端推送按 Token 去重（`SyRtcTokenExpiryDedupe`），每个 Token 只回调一次提醒、一次过期，旧 Token 迟到的推送忽略。收到后向控制面续期，再交给引擎，不要先 `leave`：
